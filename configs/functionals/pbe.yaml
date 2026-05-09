@@ -1,0 +1,29 @@
+# PBE INCAR template. Used for Si, NaCl in this paper's runs.
+# Comments document the choices; Anvil's VASP module expands {placeholders}.
+
+incar:
+  SYSTEM: "Anvil PBE single-point"
+  PREC: Accurate
+  ENCUT: 600                     # user can override via dft.encut
+  EDIFF: 1.0e-6
+  NSW: 0                         # single-point — no relaxation
+  ISIF: 2                        # compute stress at fixed cell
+  ISMEAR: 0                      # Gaussian smearing
+  SIGMA: 0.05
+  GGA: PE
+  LASPH: .TRUE.
+  LWAVE: .FALSE.
+  LCHARG: .FALSE.
+  NELM: 200
+  LREAL: .FALSE.                 # PI preference: never LREAL=Auto
+  LPLANE: .FALSE.
+
+slurm:
+  partition: "main"
+  ntasks: 32
+  mem: "64G"
+  time: "03:00:00"
+  module_loads:
+    - "intel/17.0.4"
+
+stress_convention: ase           # compression-negative, matches predictions

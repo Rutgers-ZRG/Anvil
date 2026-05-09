@@ -1,0 +1,50 @@
+# Anvil — default configuration. User yamls override fields as needed.
+# See DESIGN.md §2 for the schema.
+
+training:
+  foundation_model: allegro-oam-l-foundation
+  ensemble_size: 3
+  bootstrap_size: 100
+  per_round_dft: 60
+  loss_weights: "1:1:0.01"      # E:F:S
+  learning_rate: 5.0e-5
+  patience: 30
+  max_epochs: 200
+  compile_target: torchscript-ase
+
+generation_quotas:               # per-round DFT calls per pool
+  pool_a_entropy: 50
+  pool_b_reform: 20
+  pool_c_anchor: 10
+
+entropy_md:                      # Pool A
+  k_factors: [0, 2, 5]
+  modes: [per_atom, per_config]
+  md_steps: 1000
+  fp_cutoff: 5.0
+  fp_natx: 50
+  regularization: 1.0e-3
+  min_entropy_gain: 0.01
+
+reform_relax:                    # Pool B
+  mode: stability                # "stability" (default a) | "discovery" (opt-in b)
+  pyxtal_n_per_round: 20
+  perturb_rattle: 0.3
+  perturb_cell: 0.05
+  relax_max_steps: 200
+  relax_fmax: 0.05
+  sample_intermediates: 2
+  spglib_filter: true
+  pallas_pathway_xyz: null       # optional v1 hook
+
+anchor:                          # Pool C
+  strain_factors: [0.95, 0.97, 1.03, 1.05]
+  md_steps: 100
+  md_snapshots: 5
+
+validation:
+  tier: 2                        # 1: physics only, 2: mini broad-indtest, 3: full
+  thresholds:
+    E_MAE: 10.0                  # meV/atom
+    F_MAE: 100.0                 # meV/Å
+    S_MAE: 10.0                  # meV/Å³

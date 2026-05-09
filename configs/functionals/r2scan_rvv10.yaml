@@ -1,0 +1,32 @@
+# r2SCAN+rVV10 INCAR template. Used for carbon (BPARAM=11.95).
+# Reference: Ning et al., PRB 106, 075422 (2022).
+
+incar:
+  SYSTEM: "Anvil r2SCAN+rVV10 single-point"
+  PREC: Accurate
+  ENCUT: 600
+  EDIFF: 1.0e-6
+  NSW: 0
+  ISIF: 2
+  ISMEAR: 0
+  SIGMA: 0.05
+  METAGGA: R2SCAN
+  LUSE_VDW: .TRUE.
+  BPARAM: 11.95                  # r2SCAN+rVV10 (NOT 6.3, NOT 14.0)
+  LASPH: .TRUE.                  # required for meta-GGA
+  LWAVE: .FALSE.
+  LCHARG: .FALSE.
+  NELM: 200
+  NPAR: 4                        # carbon r2SCAN+rVV10 needs this for convergence
+  LREAL: .FALSE.
+  LPLANE: .FALSE.
+
+slurm:
+  partition: "price,main"
+  ntasks: 32
+  mem: "64G"
+  time: "03:00:00"
+  module_loads:
+    - "intel/17.0.4"
+
+stress_convention: ase

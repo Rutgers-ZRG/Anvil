@@ -1,0 +1,22 @@
+# Anvil example: NaCl B1↔B2 transition at 25-35 GPa.
+
+system: nacl
+elements: [Na, Cl]
+
+seeds:
+  from_local:
+    - data/nacl_seeds/nacl_b1_333.vasp     # 54-atom B1 supercell
+    - data/nacl_seeds/nacl_b2_444.vasp     # 54-atom B2 supercell
+
+dft:
+  functional: pbe
+  encut: 600
+  kspacing: 0.25
+
+regime:
+  pressures_gpa: [25, 28, 30, 32, 35]      # near B1↔B2 transition
+  temperatures_k: [300, 1000, 2500]        # 2500 K to capture pre-melting on B2
+
+budget:
+  max_dft_calls: 500
+  max_walltime_h: 36

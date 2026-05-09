@@ -1,0 +1,28 @@
+# Anvil example: carbon at 0–100 GPa, 300–3000 K.
+# Targets the same regime as the entropy-AL paper this work extends.
+
+system: carbon
+elements: [C]
+
+seeds:
+  from_mp:
+    - mp-66          # diamond Fd-3m
+    - mp-48          # graphite P6_3/mmc
+    - mp-47          # lonsdaleite P6_3/mmc
+    - mp-1080826     # M-carbon C2/m
+    - mp-169         # cR-32 (rhombohedral)
+
+dft:
+  functional: r2scan_rvv10
+  encut: 600
+  kspacing: 0.25
+
+regime:
+  pressures_gpa: [0, 10, 30, 60, 100]
+  temperatures_k: [300, 1000, 3000]
+
+budget:
+  max_dft_calls: 800
+  max_walltime_h: 48
+
+# All other fields use configs/defaults.yaml.

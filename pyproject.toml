@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anvil-mlip"
+version = "0.0.1"
+description = "Closed-loop active learning for fine-tuning machine-learned interatomic potentials."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Z-group", email = "li.zhu@rutgers.edu" },
+]
+requires-python = ">=3.10"
+keywords = ["machine learning", "interatomic potentials", "active learning", "DFT", "MLIP"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "ase>=3.22",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pyyaml",
+    "click>=8",
+    "jinja2",
+    "torch>=2.0",
+    "nequip>=0.16",
+    "reformpy>=2.0",
+    "libfp>=3.1.2",
+    "mp-api>=0.42",
+    "pymatgen",
+    "spglib",
+    "pyxtal",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+anvil = "anvil.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Rutgers-ZRG/Anvil"
+Documentation = "https://github.com/Rutgers-ZRG/Anvil/blob/main/DESIGN.md"
+Issues = "https://github.com/Rutgers-ZRG/Anvil/issues"
+
+[tool.setuptools.packages.find]
+include = ["anvil*"]
+
+[tool.setuptools.package-data]
+anvil = ["configs/**/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

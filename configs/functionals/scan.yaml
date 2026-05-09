@@ -1,0 +1,28 @@
+# Plain SCAN INCAR template (no rVV10).
+
+incar:
+  SYSTEM: "Anvil SCAN single-point"
+  PREC: Accurate
+  ENCUT: 600
+  EDIFF: 1.0e-6
+  NSW: 0
+  ISIF: 2
+  ISMEAR: 0
+  SIGMA: 0.05
+  METAGGA: SCAN
+  LASPH: .TRUE.
+  LWAVE: .FALSE.
+  LCHARG: .FALSE.
+  NELM: 200
+  LREAL: .FALSE.
+  LPLANE: .FALSE.
+
+slurm:
+  partition: "main"
+  ntasks: 32
+  mem: "64G"
+  time: "03:00:00"
+  module_loads:
+    - "intel/17.0.4"
+
+stress_convention: ase

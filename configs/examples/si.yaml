@@ -1,0 +1,24 @@
+# Anvil example: silicon, 0–20 GPa, 300–3000 K.
+
+system: si
+elements: [Si]
+
+seeds:
+  from_local:
+    - data/si_seeds/si_diamond.vasp
+    - data/si_seeds/si_beta_tin.vasp
+    - data/si_seeds/si_imma.vasp
+    - data/si_seeds/si_sh.vasp
+
+dft:
+  functional: pbe
+  encut: 600
+  kspacing: 0.25
+
+regime:
+  pressures_gpa: [0, 5, 10, 15, 20]
+  temperatures_k: [300, 1000, 3000]
+
+budget:
+  max_dft_calls: 600
+  max_walltime_h: 36
