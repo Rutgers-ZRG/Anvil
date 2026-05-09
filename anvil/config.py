@@ -1,13 +1,17 @@
-"""User-yaml configuration schema + validation.
+"""User-yaml configuration schema + loader + validation.
 
 See DESIGN.md §2 for the user input spec and default values.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+import typing
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+import yaml
 
 
 @dataclass
@@ -39,7 +43,7 @@ class BudgetConfig:
 
 @dataclass
 class ReformRelaxConfig:
-    mode: str = "stability"  # "stability" (mode a) | "discovery" (mode b)
+    mode: str = "stability"               # "stability" (mode a) | "discovery" (mode b)
     pyxtal_n_per_round: int = 20
     perturb_rattle: float = 0.3
     perturb_cell: float = 0.05
@@ -47,7 +51,7 @@ class ReformRelaxConfig:
     relax_fmax: float = 0.05
     sample_intermediates: int = 2
     spglib_filter: bool = True
-    pallas_pathway_xyz: Optional[str] = None  # v1 hook; v2 full pipeline
+    pallas_pathway_xyz: Optional[str] = None
 
 
 @dataclass
@@ -61,11 +65,6 @@ class AnchorConfig:
 
 @dataclass
 class EntropyMDConfig:
-    """Pool A — per-regime entropy MD.
-
-    Default (T × k_factor × mode) grid; pressures and phases come from
-    RegimeConfig and seeds.
-    """
     k_factors: list[float] = field(default_factory=lambda: [0, 2, 5])
     modes: list[str] = field(default_factory=lambda: ["per_atom", "per_config"])
     md_steps: int = 1000
@@ -77,7 +76,6 @@ class EntropyMDConfig:
 
 @dataclass
 class GenerationQuotas:
-    """Per-round DFT call quota across the three pools (sum = per_round_dft)."""
     pool_a_entropy: int = 50
     pool_b_reform: int = 20
     pool_c_anchor: int = 10
@@ -96,8 +94,8 @@ class TrainingConfig:
     foundation_model: str = "allegro-oam-l-foundation"
     ensemble_size: int = 3
     bootstrap_size: int = 100
-    per_round_dft: int = 60
-    loss_weights: str = "1:1:0.01"  # E:F:S
+    per_round_dft: int = 80                # matches DESIGN.md §3.5 default sum of A/B/C quotas
+    loss_weights: str = "1:1:0.01"
     learning_rate: float = 5e-5
     patience: int = 30
     max_epochs: int = 200
@@ -115,7 +113,6 @@ class AnvilConfig:
     regime: RegimeConfig
     budget: BudgetConfig
 
-    # All optional with defaults
     entropy_md: EntropyMDConfig = field(default_factory=EntropyMDConfig)
     reform_relax: ReformRelaxConfig = field(default_factory=ReformRelaxConfig)
     anchor: AnchorConfig = field(default_factory=AnchorConfig)
@@ -124,25 +121,122 @@ class AnvilConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
+class ConfigError(ValueError):
+    """Schema validation failure with user-friendly diagnostics."""
+
+
+def _coerce(cls, value):
+    """Recursively coerce a dict into a dataclass instance.
+
+    Resolves PEP 563 string annotations via typing.get_type_hints so nested
+    dataclasses are recognized even with `from __future__ import annotations`.
+    For unknown keys, raises ConfigError (helps the user catch typos).
+    """
+    if value is None:
+        return cls()
+    if not isinstance(value, dict):
+        raise ConfigError(f"Expected dict for {cls.__name__}, got {type(value).__name__}")
+    known = {f.name: f for f in fields(cls)}
+    extras = set(value) - set(known)
+    if extras:
+        raise ConfigError(
+            f"Unknown keys for {cls.__name__}: {sorted(extras)}. "
+            f"Allowed: {sorted(known)}"
+        )
+    # Resolve string annotations to real classes
+    hints = typing.get_type_hints(cls)
+    kwargs: dict[str, Any] = {}
+    for name in known:
+        if name not in value:
+            continue
+        v = value[name]
+        resolved = hints.get(name, known[name].type)
+        # Strip Optional / Union for dataclass detection
+        origin = typing.get_origin(resolved)
+        if origin is typing.Union:
+            args = [a for a in typing.get_args(resolved) if a is not type(None)]
+            if len(args) == 1:
+                resolved = args[0]
+        if isinstance(resolved, type) and is_dataclass(resolved):
+            kwargs[name] = _coerce(resolved, v)
+        else:
+            kwargs[name] = v
+    return cls(**kwargs)
+
+
 def load_config(path: str | Path) -> AnvilConfig:
     """Load and validate a user yaml.
 
-    Raises ConfigError with a helpful message on schema mismatch.
+    Defaults are applied via the dataclass field defaults; the user yaml
+    only needs to set the required fields (system, elements, seeds, dft,
+    regime, budget) plus any overrides.
     """
-    raise NotImplementedError("week 1: see DESIGN.md §2 + JSON schema")
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found: {path}")
+    with open(path) as f:
+        raw = yaml.safe_load(f) or {}
+
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Top-level yaml must be a mapping, got {type(raw).__name__}")
+
+    # Required top-level fields
+    required = {"system", "elements", "seeds", "dft", "regime", "budget"}
+    missing = required - set(raw)
+    if missing:
+        raise ConfigError(f"Missing required top-level keys: {sorted(missing)}")
+
+    cfg = _coerce(AnvilConfig, raw)
+    validate_config(cfg)
+    return cfg
 
 
 def validate_config(cfg: AnvilConfig) -> None:
-    """Schema + cross-field consistency checks.
+    """Schema + cross-field consistency checks."""
+    if not cfg.system or not isinstance(cfg.system, str):
+        raise ConfigError("`system` must be a non-empty string")
+    if not cfg.elements:
+        raise ConfigError("`elements` must be a non-empty list")
 
-    - Foundation model covers all elements (via FoundationRegistry).
-    - DFT functional has an INCAR template under configs/functionals/.
-    - Pool quotas sum ≤ per_round_dft.
-    - Validation tier ∈ {1, 2, 3}.
-    - PALLAS pathway xyz exists (if specified).
+    s = cfg.seeds
+    if not (s.from_mp or s.from_local):
+        raise ConfigError("`seeds` must specify exactly one of from_mp / from_local")
+    if s.from_mp and s.from_local:
+        raise ConfigError("`seeds` cannot specify both from_mp and from_local")
+
+    if cfg.validation.tier not in (1, 2, 3):
+        raise ConfigError(f"`validation.tier` must be 1, 2, or 3 (got {cfg.validation.tier})")
+
+    if cfg.reform_relax.mode not in ("stability", "discovery"):
+        raise ConfigError(
+            f"`reform_relax.mode` must be 'stability' or 'discovery' "
+            f"(got {cfg.reform_relax.mode!r})"
+        )
+
+    if cfg.budget.max_dft_calls <= 0:
+        raise ConfigError("`budget.max_dft_calls` must be > 0")
+
+    # Quotas should not exceed per_round_dft
+    q = cfg.generation_quotas
+    total_quota = q.pool_a_entropy + q.pool_b_reform + q.pool_c_anchor
+    if total_quota > cfg.training.per_round_dft + 5:    # small slop for rounding
+        raise ConfigError(
+            f"Sum of generation quotas ({total_quota}) exceeds per_round_dft "
+            f"({cfg.training.per_round_dft})"
+        )
+
+
+def to_canonical_json(cfg: AnvilConfig) -> str:
+    """Serialize cfg to canonical JSON (sorted keys, recursive dataclass→dict).
+
+    Used for content-hash provenance.
     """
-    raise NotImplementedError("week 1: see DESIGN.md §4.4 element coverage")
-
-
-class ConfigError(ValueError):
-    """Raised on schema validation failure with user-friendly diagnostics."""
+    def _walk(obj):
+        if is_dataclass(obj):
+            return {f.name: _walk(getattr(obj, f.name)) for f in fields(obj)}
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_walk(v) for v in obj]
+        return obj
+    return json.dumps(_walk(cfg), sort_keys=True, indent=2)
