@@ -59,8 +59,9 @@ anchor:
     )
     assert orch.ckpt.state == AnvilState.INIT
 
-    # Bootstrap WITHOUT submitting (no Slurm available in CI)
-    orch.bootstrap(do_submit=False)
+    # Bootstrap WITHOUT submitting and WITHOUT foundation MLIP (no model
+    # available in unit-test env). Pool C and validation are foundation-free.
+    orch.bootstrap(do_submit=False, skip_pools=("A", "B"))
     assert orch.ckpt.state == AnvilState.BOOTSTRAP_DFT_QUEUED
 
     # Pool C: 1 phase × 2 P × 2 strain = 4 cells
@@ -75,6 +76,13 @@ anchor:
         assert (sd / "POSCAR").exists()
         meta = json.loads((sd / ".anvil_meta.json").read_text())
         assert meta["pool"] in ("C", "validation")
+
+    # bootstrap_manifest.json should be present and group dirs by pool
+    pool_manifest = json.loads((orch.run_dir / "bootstrap_manifest.json").read_text())
+    assert len(pool_manifest["pool_a"]) == 0       # skipped
+    assert len(pool_manifest["pool_b"]) == 0       # skipped
+    assert len(pool_manifest["pool_c"]) == 4
+    assert len(pool_manifest["validation"]) == 4
 
     # Checkpoint persisted, .anvil symlink in cwd
     state = json.loads((orch.run_dir / ".anvil" / "state.json").read_text())
