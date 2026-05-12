@@ -211,15 +211,31 @@ def generate_pool_a(
                         atoms = relaxed.copy()
                         cell_candidates: list[Atoms] = []
 
+                        # If min_entropy_gain is set very negative (e.g. -1e9),
+                        # bypass entropy_gain computation entirely — accept all
+                        # snapshots, rely on n_target subsampling. Cast to float
+                        # because yaml can parse "-1.0e9" as str.
+                        try:
+                            _meg = float(config.min_entropy_gain)
+                        except (TypeError, ValueError):
+                            _meg = 0.0
+                        bypass_filter = _meg <= -1e6
+
                         def on_snapshot(at: Atoms,
                                         _p=phase, _P=P, _T=T,
                                         _k=k_factor, _m=mode) -> None:
-                            # Evaluate entropy_gain on the current frame
-                            try:
-                                gain = entropy_calc.entropy_gain(at)
-                            except Exception:
-                                return
-                            if gain > config.min_entropy_gain:
+                            if bypass_filter:
+                                gain = 0.0
+                            else:
+                                try:
+                                    gain = entropy_calc.entropy_gain(at)
+                                except Exception as exc:
+                                    if verbose:
+                                        print(f"[Pool A]   entropy_gain "
+                                              f"raised {type(exc).__name__}: "
+                                              f"{exc}; dropping snapshot")
+                                    return
+                            if bypass_filter or gain > _meg:
                                 snap = at.copy()
                                 snap.calc = None
                                 snap.info["pool"] = "A"
@@ -233,8 +249,12 @@ def generate_pool_a(
                                     f"entropy_md_k{_k:g}_{_m}"
                                 )
                                 cell_candidates.append(snap)
-                                # Add to shared dataset so future MD steps see it
-                                entropy_calc.add_config(at)
+                                if not bypass_filter:
+                                    # Add to shared dataset so future MD steps see it
+                                    try:
+                                        entropy_calc.add_config(at)
+                                    except Exception:
+                                        pass
 
                         try:
                             _thermalize_and_md_with_callback(

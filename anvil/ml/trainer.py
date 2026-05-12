@@ -44,6 +44,26 @@ def _template_path(name: str) -> Path:
     return p
 
 
+def _patch_chemical_species_map(obj, elements: list[str]) -> int:
+    """Recursively walk `obj` and replace any `chemical_species_to_atom_type_map`
+    dict with one keyed by the user's elements (identity mapping).
+
+    Returns the number of maps patched.
+    """
+    n = 0
+    if isinstance(obj, dict):
+        for k, v in list(obj.items()):
+            if k == "chemical_species_to_atom_type_map":
+                obj[k] = {el: el for el in elements}
+                n += 1
+            else:
+                n += _patch_chemical_species_map(v, elements)
+    elif isinstance(obj, list):
+        for v in obj:
+            n += _patch_chemical_species_map(v, elements)
+    return n
+
+
 def _materialize_cell_config(
     template_yaml: dict,
     train_xyz: str | Path,
@@ -51,10 +71,17 @@ def _materialize_cell_config(
     seed: int,
     run_dir: Path,
     run_name: str,
+    *,
+    elements: list[str] | None = None,
 ) -> Path:
     """Clone template_yaml + mutate the per-cell paths and seed.
 
     Returns the path to the materialized config.yaml.
+
+    If `elements` is provided, every ChemicalSpeciesToAtomTypeMapper entry in
+    the template is rewritten with `{el: el}` for each element — required when
+    the template was extracted from a different-system run (e.g. Si template
+    used for a carbon run).
     """
     cfg = copy.deepcopy(template_yaml)
     cfg["data"]["train_file_path"] = str(Path(train_xyz).resolve())
@@ -67,6 +94,13 @@ def _materialize_cell_config(
     cfg["trainer"]["callbacks"][0]["filename"] = "best"
     cfg["trainer"]["logger"]["save_dir"] = str(log_root.resolve())
     cfg["trainer"]["logger"]["name"] = run_name
+
+    if elements:
+        n_patched = _patch_chemical_species_map(cfg, elements)
+        if n_patched == 0:
+            # Template has no map — the foundation will pick up types from
+            # the data; nothing to do.
+            pass
 
     cfg_path = run_dir / "config.yaml"
     with open(cfg_path, "w") as f:
@@ -150,6 +184,7 @@ def train_ensemble(
     time: str = "12:00:00",
     do_submit: bool = True,
     ssh_host: Optional[str] = None,
+    elements: Optional[list[str]] = None,
 ) -> EnsembleTrainResult:
     """Train K=n_models Allegro-OAM-L fine-tunes in parallel.
 
@@ -183,6 +218,7 @@ def train_ensemble(
 
         _materialize_cell_config(
             template_yaml, train_xyz, val_xyz, seed, run_dir, run_name,
+            elements=elements,
         )
         script, _ = _slurm_train_script(run_dir, cluster, time=time)
         pending_scripts.append(script)

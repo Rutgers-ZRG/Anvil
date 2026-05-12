@@ -22,7 +22,10 @@ incar:
   LPLANE: .FALSE.
 
 slurm:
-  partition: "price,main"
+  # NOTE: "price" exists on amareln but NOT on amarel3. Falling back to "main"
+  # only works on both clusters; users wanting the price partition can
+  # override via dft.extra_incar / a custom slurm yaml.
+  partition: "main"
   ntasks: 32
   mem: "64G"
   time: "03:00:00"

@@ -38,7 +38,9 @@ SEEDS = {
     "diamond":     "mp-66_C_Fd-3m.vasp",
     "graphite":    "mp-48_C_P6_3_mmc.vasp",
     "lonsdaleite": "mp-47_C_P6_3_mmc.vasp",
-    "mcarbon":     "mp-1080826_C_C2_m.vasp",
+    # mcarbon (mp-1080826) excluded: 8-atom primitive → 64-atom 2x2x2 supercell
+    # blows the 40 GB GPU during Allegro backward pass. Dropping leaves 4
+    # phases which is still a meaningful regime probe for the ablation.
     "cR32":        "mp-169_C_R-3m.vasp",
 }
 
@@ -57,14 +59,30 @@ ABLATION_ROWS = {
 
 
 def _ensure_supercells(out_dir: Path, target_atoms: int = 16) -> dict[str, str]:
-    """Build 16-atom supercells of each carbon seed. Returns phase→path."""
+    """Build (or pick up cached) 16-atom supercells of each carbon seed.
+
+    Resolution order per phase:
+      1. If <out_dir>/<phase>.vasp already exists, use it (cached supercell).
+      2. Otherwise read the original from SEED_BASE and build a supercell.
+      3. Otherwise skip.
+    """
     from ase.io import read, write as ase_write
     out_dir.mkdir(parents=True, exist_ok=True)
     phase_paths: dict[str, str] = {}
     for phase, fname in SEEDS.items():
+        cached = out_dir / f"{phase}.vasp"
+        if cached.exists():
+            try:
+                atoms = read(str(cached))
+                phase_paths[phase] = str(cached)
+                print(f"  {phase}: using cached supercell ({len(atoms)} atoms)")
+                continue
+            except Exception:
+                pass
         src = Path(SEED_BASE) / fname
         if not src.exists():
-            print(f"  skipping {phase} (seed not on amareln: {src})")
+            print(f"  skipping {phase}: no cached supercell at {cached} "
+                  f"and source {src} not present")
             continue
         atoms = read(str(src))
         n = len(atoms)
@@ -74,10 +92,9 @@ def _ensure_supercells(out_dir: Path, target_atoms: int = 16) -> dict[str, str]:
             import math
             factor = max(1, int(math.ceil((target_atoms / n) ** (1 / 3))))
             sc = atoms.repeat([factor, factor, factor])
-        dst = out_dir / f"{phase}.vasp"
-        ase_write(str(dst), sc, format="vasp", vasp5=True, direct=True)
-        phase_paths[phase] = str(dst)
-        print(f"  {phase}: {n} atoms → {len(sc)} atoms → {dst}")
+        ase_write(str(cached), sc, format="vasp", vasp5=True, direct=True)
+        phase_paths[phase] = str(cached)
+        print(f"  {phase}: {n} atoms → {len(sc)} atoms → {cached}")
     return phase_paths
 
 
@@ -110,11 +127,11 @@ generation_quotas:
 entropy_md:
   k_factors: [2, 5]
   modes: [per_atom]
-  md_steps: 800
-  fp_cutoff: 5.0
+  md_steps: 400
+  fp_cutoff: 3.0       # carbon recipe (per CLAUDE.md): cutoff must be ≤ ~Lcell/2
   fp_natx: 50
   regularization: 0.001
-  min_entropy_gain: 0.005
+  min_entropy_gain: -1000000000   # bypass — accept ALL snaps, n_target subsamples
 reform_relax:
   mode: stability
   pyxtal_n_per_round: 8
@@ -127,6 +144,7 @@ anchor:
   strain_factors: [0.95, 0.97, 1.03, 1.05]
 training:
   ensemble_size: 3
+  per_round_dft: {row["pool_a_entropy"] + row["pool_b_reform"] + row["pool_c_anchor"]}
 """
     cfg_path = Path(scratch_root) / f"carbon_ablation_n200/{row_name}.yaml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +176,7 @@ def _wait_jobs(orch, *, max_minutes: int = 24 * 60, poll_s: float = 60.0,
 
 def run_ablation_row(row_name: str, row: dict,
                      phase_paths: dict[str, str], scratch_root: str,
-                     foundation_calc) -> dict:
+                     foundation_calc, cluster: str = "amareln") -> dict:
     """Run one ablation row end-to-end: bootstrap → collect → train → eval."""
     from anvil.orchestrator import Orchestrator
     from anvil.ml.ensemble import EnsembleCalculator
@@ -176,7 +194,7 @@ def run_ablation_row(row_name: str, row: dict,
                           scratch_root=scratch_root)
 
     orch = Orchestrator.from_config_path(
-        cfg_path, cluster="amareln", scratch_root=scratch_root,
+        cfg_path, cluster=cluster, scratch_root=scratch_root,
     )
     print(f"  run_dir: {orch.run_dir}")
 
@@ -226,7 +244,16 @@ def run_ablation_row(row_name: str, row: dict,
     return metrics
 
 
-def main() -> int:
+def main(row_filter: Optional[str] = None,
+         cluster: str = "amareln") -> int:
+    """Run one or all ablation rows.
+
+    With row_filter (e.g. "A_only"): runs that single row end-to-end.
+    Without: runs all four rows sequentially.
+
+    Either way, the process needs GPU access (foundation MLIP load + Pool
+    A/B gen + final ensemble eval). Submit on the gpu partition.
+    """
     from anvil.ml.foundation import FoundationRegistry
 
     scratch_root = "/scratch/lz432"
@@ -237,19 +264,29 @@ def main() -> int:
         print("FATAL: no carbon seeds available")
         return 1
 
-    print(f"\nLoading Allegro-OAM-L on cuda...")
+    print(f"\nLoading Allegro-OAM-L on cuda (cluster={cluster})...")
     foundation = FoundationRegistry.make_calc(
-        "allegro-oam-l-foundation", cluster="amareln", device="cuda",
+        "allegro-oam-l-foundation", cluster=cluster, device="cuda",
         elements=["C"],
     )
     print(f"  loaded")
 
-    summary = {}
-    for row_name, row in ABLATION_ROWS.items():
+    rows_to_run = (
+        {row_filter: ABLATION_ROWS[row_filter]} if row_filter
+        else ABLATION_ROWS
+    )
+
+    summary_path = Path(f"{scratch_root}/carbon_ablation_n200/summary.json")
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+    else:
+        summary = {}
+
+    for row_name, row in rows_to_run.items():
         try:
             metrics = run_ablation_row(
                 row_name, row, phase_paths, scratch_root,
-                foundation_calc=foundation,
+                foundation_calc=foundation, cluster=cluster,
             )
             summary[row_name] = {
                 "E_MAE": metrics["E_MAE"], "F_MAE": metrics["F_MAE"],
@@ -263,10 +300,7 @@ def main() -> int:
             traceback.print_exc()
             summary[row_name] = {"error": str(exc)}
 
-        # Persist running summary so partial results survive a crash
-        Path(f"{scratch_root}/carbon_ablation_n200/summary.json").write_text(
-            json.dumps(summary, indent=2)
-        )
+        summary_path.write_text(json.dumps(summary, indent=2))
 
     print(f"\n{'='*60}")
     print(f"ABLATION SUMMARY (broad-indtest, 75 cells)")
@@ -277,11 +311,21 @@ def main() -> int:
         m = summary.get(row_name, {})
         if "error" in m:
             print(f"{row_name:<12s}  FAILED: {m['error']}")
-        else:
+        elif "E_MAE" in m:
             print(f"{row_name:<12s} {m['E_MAE']:>7.2f} {m['F_MAE']:>7.1f} "
                   f"{m['S_MAE']:>7.2f}")
+        else:
+            print(f"{row_name:<12s}  (not yet run)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("row", nargs="?", default=None,
+                   help="Row to run (A_only | A_plus_B | A_plus_C | full); "
+                        "all if omitted.")
+    p.add_argument("--cluster", default="amareln",
+                   choices=["amareln", "amarel3"])
+    args = p.parse_args()
+    sys.exit(main(row_filter=args.row, cluster=args.cluster))

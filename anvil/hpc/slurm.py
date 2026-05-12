@@ -50,8 +50,19 @@ class SlurmJobSpec:
         return d
 
     def render(self, body: str) -> str:
-        """Render full sbatch script: shebang + directives + body."""
-        return "\n".join(["#!/bin/bash", *self.directives(), "", body, ""])
+        """Render full sbatch script: shebang + directives + body.
+
+        Uses `#!/bin/bash -l` to make it a login shell so /etc/profile.d/*.sh
+        runs (provides `module`, `srun`, etc. on amarel3 where the default
+        Slurm shell skips these). Also explicitly sources lmod for safety.
+        """
+        preamble = [
+            "# Source modules for clusters where non-login shells skip it",
+            "source /etc/profile.d/lmod.sh 2>/dev/null || true",
+            "source /etc/profile.d/modules.sh 2>/dev/null || true",
+        ]
+        return "\n".join(["#!/bin/bash -l", *self.directives(),
+                          "", *preamble, "", body, ""])
 
 
 class SlurmError(RuntimeError):

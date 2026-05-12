@@ -455,6 +455,7 @@ class Orchestrator:
             time=time,
             do_submit=do_submit,
             ssh_host=ssh_host,
+            elements=list(self.config.elements),
         )
 
         # Persist for resume
@@ -802,6 +803,7 @@ class Orchestrator:
             n_models=self.config.training.ensemble_size,
             seeds=seeds, time=time,
             do_submit=do_submit, ssh_host=ssh_host,
+            elements=list(self.config.elements),
         )
         self.ckpt.pending_job_ids = list(result.job_ids)
         import json as _json
