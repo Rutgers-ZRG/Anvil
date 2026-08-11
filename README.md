@@ -3,13 +3,23 @@
 > Closed-loop active learning for fine-tuning machine-learned interatomic potentials.
 > One yaml. One command. A reliable, validated MLIP.
 
-**Status**: design phase. Skeleton-only. No algorithm code yet.
+**Status**: v1 code-complete (51 passing tests) — resumable closed-loop
+orchestration, three-pool generation, dataset-aware acquisition, Allegro
+fine-tuning, and tiered validation. Current backend is VASP + Slurm; an
+ASE-calculator engine abstraction is the next milestone. First end-to-end
+result: a carbon pool-ablation study.
 
 See [`DESIGN.md`](./DESIGN.md) for the v1 architecture, three-pool generation
-strategy, validation tiers, and milestones. Cut code only after the design is
-approved.
+strategy, validation tiers, and milestones.
 
-## Quick start (planned UX, not yet implemented)
+The method implemented here is described in:
+
+> Meiyan Wang, Rishi Rao, and Li Zhu,
+> *Dataset-aware entropy-maximized active learning for machine-learned
+> interatomic potentials*,
+> [arXiv:2605.20384](https://arxiv.org/abs/2605.20384) (2026).
+
+## Quick start
 
 ```bash
 pip install -e .
@@ -77,3 +87,19 @@ Builds on:
   neural-network MLIPs.
 - Karabin & Perez, *J. Chem. Phys.* **153**, 094110 (2020); Subramanyam &
   Perez, *npj Comput. Mater.* **11**, 218 (2025).
+
+## Citation
+
+If you use Anvil, please cite:
+
+```bibtex
+@misc{wang2026anvil,
+  title  = {Dataset-aware entropy-maximized active learning for
+            machine-learned interatomic potentials},
+  author = {Wang, Meiyan and Rao, Rishi and Zhu, Li},
+  year   = {2026},
+  eprint = {2605.20384},
+  archivePrefix = {arXiv},
+  url    = {https://arxiv.org/abs/2605.20384}
+}
+```
