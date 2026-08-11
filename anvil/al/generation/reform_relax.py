@@ -215,6 +215,19 @@ def generate_pool_b(
 
             final = atoms.copy()
             final.calc = None
+            # Nate change #4: stability metric = max |F| on the BASE PES at the
+            # relaxed geometry. Small ⇒ the reform-relaxed structure also sits
+            # near a base-PES minimum (the reform bias didn't drag it off a
+            # physical basin); large ⇒ reform-only artifact. Uses the base calc
+            # alone (the FIRE-minimized combined force is ~relax_fmax by
+            # construction and carries no stability signal).
+            try:
+                probe = atoms.copy()
+                probe.calc = base_calc
+                fmax_base = float(np.abs(probe.get_forces()).max())
+            except Exception:
+                fmax_base = float("nan")
+            final.info["max_force"] = fmax_base
             final.info["pool"] = "B"
             final.info["phase"] = phase
             final.info["sample_kind"] = f"reform_relax_{config.mode}"

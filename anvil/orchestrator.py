@@ -240,7 +240,7 @@ class Orchestrator:
             fp_state = self.run_dir / "fp_dataset.npz"
             pool_a, _ = generate_pool_a(
                 md_cfg, base_calc=foundation_calc,
-                n_target=self.config.training.bootstrap_size,
+                n_target=self.config.generation_quotas.pool_a_entropy,
                 fp_dataset_path=fp_state,
                 verbose=True,
             )
@@ -656,42 +656,61 @@ class Orchestrator:
         self.ckpt = transition(self.ckpt, AnvilState.ROUND_CANDIDATES)
         self._save()
 
-    def round_acquired(self) -> None:
-        """ROUND_ACQUIRED: quota-merge candidates from the current round.
+    def round_acquired(self, *, acquisition: "Acquisition | None" = None) -> None:  # noqa: F821
+        """ROUND_ACQUIRED: select the round's DFT batch via a pluggable Acquisition.
 
-        v1: simple quota merge with no FP-dedupe (pools small enough that
-        redundancy is unlikely on a single-system, ≤100 candidates/pool).
-        Future: pluggable Acquisition class (PoolAOnly / PoolAB / etc.) and
-        FP-distance dedupe.
+        Loads the round's candidate pools + the cumulative training pool, delegates
+        selection to an `Acquisition` object (which does per-pool ranking, cross-pool
+        FP-dedupe, and a final prune vs the current training pool), and writes
+        selected.xyz.
+
+        Args:
+            acquisition: an Acquisition instance. If None, one is built from the
+                config's generation_quotas via `build_acquisition` (a pool with
+                quota 0 is excluded — this is how the ablation encodes A_only /
+                A+B / A+C). Passing an explicit object is how the ablation harness
+                and unit tests pin a specific variant.
         """
         import json as _json
         from ase.io import read as ase_read, write as ase_write
+        from anvil.al.acquisition import build_acquisition
 
         round_dir = self.run_dir / f"round_{self.ckpt.round}"
-        manifest = _json.loads(
-            (round_dir / "candidates_manifest.json").read_text()
+        manifest = _json.loads((round_dir / "candidates_manifest.json").read_text())
+
+        def _load(label: str) -> list:
+            xyz = manifest.get(label)
+            if not xyz:
+                return []
+            return ase_read(xyz, index=":", format="extxyz")
+
+        pool_a = _load("pool_a")
+        pool_b = _load("pool_b")
+        pool_c = _load("pool_c")
+
+        # Cumulative training pool (for the final FP-distance prune). Empty on the
+        # first AL round if train.xyz has not been written yet.
+        train_xyz = self.run_dir / "train.xyz"
+        current_training_pool = (
+            ase_read(str(train_xyz), index=":", format="extxyz")
+            if train_xyz.exists() else []
         )
 
-        quotas = {
-            "pool_a": self.config.generation_quotas.pool_a_entropy,
-            "pool_b": self.config.generation_quotas.pool_b_reform,
-            "pool_c": self.config.generation_quotas.pool_c_anchor,
-        }
-        selected = []
-        for label, xyz in manifest.items():
-            if not xyz:
-                continue
-            atoms_list = ase_read(xyz, index=":", format="extxyz")
-            quota = quotas.get(label, len(atoms_list))
-            atoms_list = atoms_list[:quota]
-            for a in atoms_list:
-                a.info.setdefault("pool", label[-1].upper())
-            selected.extend(atoms_list)
+        acq = acquisition or build_acquisition(self.config)
+        selected = acq.select(pool_a, pool_b, pool_c, current_training_pool)
 
         if selected:
-            ase_write(str(round_dir / "selected.xyz"), selected,
-                       format="extxyz")
+            ase_write(str(round_dir / "selected.xyz"), selected, format="extxyz")
         (round_dir / "selected_count.txt").write_text(str(len(selected)))
+        # Provenance: record which acquisition + resulting pool composition.
+        from collections import Counter
+        comp = Counter(a.info.get("pool", "?") for a in selected)
+        (round_dir / "acquisition_report.json").write_text(_json.dumps({
+            "acquisition": type(acq).__name__,
+            "n_selected": len(selected),
+            "pool_composition": dict(comp),
+            "n_candidates": {"A": len(pool_a), "B": len(pool_b), "C": len(pool_c)},
+        }, indent=2))
 
         self.ckpt = transition(self.ckpt, AnvilState.ROUND_ACQUIRED)
         self._save()

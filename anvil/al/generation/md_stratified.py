@@ -123,6 +123,7 @@ def generate_pool_a(
     n_target: Optional[int] = None,
     fp_dataset_path: Optional[Path] = None,
     seed_atoms_per_phase: Optional[dict[str, Atoms]] = None,
+    rng_seed: int = 42,
     verbose: bool = True,
 ) -> tuple[list[Atoms], FingerprintDataset]:
     """Generate Pool A candidates by per-regime stratified entropy MD.
@@ -274,9 +275,11 @@ def generate_pool_a(
                             print(f"[Pool A]     accepted {len(cell_candidates)} "
                                   f"snapshots (running total {len(candidates)})")
 
-    # Subsample to n_target uniformly across (phase, P, T, k, mode) bins
+    # Subsample to n_target uniformly across (phase, P, T, k, mode) bins.
+    # rng_seed is a parameter (not hardcoded) so multi-seed campaigns get
+    # genuinely different Pool-A subsamples per seed.
     if n_target is not None and len(candidates) > n_target:
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(rng_seed)
         idx = sorted(rng.choice(len(candidates), n_target, replace=False))
         candidates = [candidates[i] for i in idx]
 
