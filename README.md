@@ -1,5 +1,7 @@
 # Anvil
 
+**A**ctive-learning **N**etwork **V**alidation and **I**terative **L**abeling
+
 > Closed-loop active learning for fine-tuning machine-learned interatomic potentials.
 > One yaml. One command. A reliable, validated MLIP.
 
