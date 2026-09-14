@@ -22,7 +22,9 @@ slurm:
   ntasks: 32
   mem: "64G"
   time: "03:00:00"
-  module_loads:
-    - "intel/17.0.4"
+  # No module_loads here on purpose: the compiler module is a property of the
+  # cluster, not of the functional. amareln has intel/17.0.4, amarel3 only
+  # 16.0.3 / 17.0.2 / 18.0.5 — the cluster registry supplies the right one.
+  # Override per run with dft.engine_options.slurm.module_loads if needed.
 
 stress_convention: ase

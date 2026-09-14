@@ -404,3 +404,20 @@ def test_qe_without_any_pseudo_dir_fails_loudly(tmp_path):
     engine = QEEngine(options={"pseudopotentials": {"Si": "si.UPF"}})
     with pytest.raises(EngineError, match="No pseudopotential directory"):
         engine.write_inputs(bulk("Si", "diamond", a=5.43), tmp_path / "s")
+
+
+def test_amarel3_uses_srun_and_an_intel_module_that_exists(tmp_path):
+    """amarel3 has no intel/17.0.4, and its compute nodes have no mpirun."""
+    from anvil.hpc.clusters import get_cluster
+
+    cluster = get_cluster("amarel3")
+    assert cluster.intel_module == "intel/17.0.2"
+
+    engine = VaspEngine(cluster=cluster, cat_potcar=False)
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    body = engine.make_job_script(sd)[0].read_text()
+    assert "srun --mpi=pmi2 /home/lz432/apps/vasp.6.4.2/bin/vasp_std" in body
+    assert "module load intel/17.0.2" in body
+    assert "mpirun" not in body
+    assert "#SBATCH --chdir=" in body                # /cache/home default
