@@ -15,6 +15,11 @@ Two modes, selected with `dft.engine_options.mode`:
       parse `pw.out` with ASE. Use this when QEpy is not installed on the
       cluster.
 
+Both modes were checked to agree to SCF noise on rattled Si (dE ~ 2e-5 eV,
+dF ~ 2e-7 eV/Å). Note the f90wrap pin in pyproject's [qe] extra: with f90wrap
+0.3.x the QEpy wheels raise "0-th dimension must be fixed to 2 but got 4" from
+Driver.get_forces() — energy and stress survive, forces do not.
+
 Config sketch::
 
     dft:

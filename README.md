@@ -39,7 +39,7 @@ labels; `dft.engine_options` holds its settings.
 | `dft.engine` | Backend | Install |
 |---|---|---|
 | `vasp` (default) | VASP + Slurm | VASP binary + POTCARs on the cluster |
-| `qe` | Quantum ESPRESSO — in-process via QEpy (`mode: qepy`) or batch `pw.x` (`mode: pwx`) | `pip install anvil-mlip[qe]`, or just a `pw.x` binary for `pwx` |
+| `qe` | Quantum ESPRESSO — in-process via QEpy (`mode: qepy`) or batch `pw.x` (`mode: pwx`) | `pip install anvil-mlip[qe]` (PyPI QEpy is a *serial* build; for MPI build it from source against a `-fPIC` QE 7.2), or just a `pw.x` binary for `pwx` |
 | `ase` | Any ASE calculator: GPAW, CP2K, Abinit, FHI-aims, xTB... | whatever that calculator needs |
 
 ```yaml
