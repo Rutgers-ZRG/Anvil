@@ -142,6 +142,24 @@ def submit_throttled(
     return job_ids
 
 
+def cancel(job_ids: list[str], *, ssh_host: Optional[str] = None) -> list[str]:
+    """scancel the given job ids; return the ids we actually asked about.
+
+    Ignores the "DONE"/"" placeholders that `submit()` uses for struct dirs it
+    skipped, and tolerates ids that already terminated.
+    """
+    ids = [j for j in job_ids if j and j != "DONE"]
+    if not ids:
+        return []
+    try:
+        _run(["scancel", *ids], ssh_host=ssh_host)
+    except SlurmError as exc:
+        # Already-finished jobs make scancel complain; not worth failing on.
+        if "Invalid job id" not in str(exc):
+            raise
+    return ids
+
+
 def poll(job_ids: list[str], *, ssh_host: Optional[str] = None) -> dict[str, str]:
     """Return {job_id: state} via squeue (live) + sacct (terminal)."""
     out: dict[str, str] = {}

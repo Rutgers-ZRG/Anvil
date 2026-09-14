@@ -26,10 +26,27 @@ The method implemented here is described in:
 
 ```bash
 pip install -e .
-anvil submit --config configs/examples/carbon.yaml
-# ... ~24 h later, depending on DFT budget ...
-anvil report carbon
+
+# 1. cold start: generate structures + queue the DFT batch
+anvil submit --config configs/examples/carbon.yaml --cluster amareln
+
+# 2. drive the loop: collect -> train -> validate -> next round, until a
+#    stop criterion fires. Holds a GPU, so run it as a job rather than on a
+#    login node:
+sbatch -p gpu --gres=gpu:1 -t 24:00:00 --wrap "anvil daemon <run_dir>"
+
+anvil status <run_dir>      # state, round, DFT calls used
+anvil cancel <run_dir>      # cancel pending jobs; `daemon` resumes later
 ```
+
+Pools A and B generate structures with the foundation MLIP in the calling
+process, so `anvil submit` also wants a GPU; pass `--skip-pools A,B` for an
+anchors-only smoke test that runs anywhere. `anvil collect` does the labeling
+half alone (wait for the DFT jobs, parse them into `train.xyz` / `val.xyz`)
+when you would rather not hand the whole loop to the daemon.
+
+`anvil report` is not implemented yet, and neither is the final
+compile/validate step the loop stops at.
 
 ## DFT engines
 
