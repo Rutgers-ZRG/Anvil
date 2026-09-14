@@ -144,6 +144,11 @@ class QEEngine(DFTEngine):
     ) -> Path:
         from ase.io.espresso import write_espresso_in
 
+        if not self.pseudo_dir:
+            raise EngineError(
+                "No pseudopotential directory: set dft.engine_options.pseudo_dir, "
+                "or use a cluster whose registry defines qe_pseudo_root."
+            )
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         kpts = kpoint_mesh(atoms, self.kspacing)
@@ -168,23 +173,45 @@ class QEEngine(DFTEngine):
 
     # ------------------------------------------------------------ submission
 
+    def _default_modules(self) -> list[str]:
+        """QE is often built against a different compiler than VASP."""
+        qe_mods = list(getattr(self.cluster, "qe_modules", ()) or ()) if self.cluster else []
+        return qe_mods or super()._default_modules()
+
+    def _launcher(self, n_tasks: int) -> str:
+        """`qe_launcher` wins over the cluster-wide (VASP) `mpi_launcher`."""
+        if not self.options.get("launcher") and self.cluster:
+            qe_launcher = getattr(self.cluster, "qe_launcher", "")
+            if qe_launcher:
+                return (qe_launcher.format(n=n_tasks) if "{n}" in qe_launcher
+                        else qe_launcher)
+        return super()._launcher(n_tasks)
+
     def _job_body(self, struct_dir: Path) -> str:
         spec = self._job_spec(struct_dir)
-        lines = [*self._module_lines(), *self._conda_lines(), f"cd {struct_dir}"]
+        lines = [
+            *self._module_lines(), *self._env_lines(), *self._conda_lines(),
+            f"cd {struct_dir}",
+        ]
+        launcher = self._launcher(spec.n_tasks)
         if self.mode == "qepy":
-            python_bin = self._python_bin()
             lines.append(
-                f"mpirun -n {spec.n_tasks} {python_bin} -m anvil.dft.engines._run "
+                f"{launcher} {self._python_bin()} -m anvil.dft.engines._run "
                 f"{shlex.quote(str(struct_dir))} > qepy.log 2>&1"
             )
         else:
-            pw_bin = self.options.get("pw_bin") or (
-                getattr(self.cluster, "pw_bin", "pw.x") if self.cluster else "pw.x"
-            )
+            pw_flags = self.options.get("pw_flags", "")
+            pw_flags = f"{pw_flags} " if pw_flags else ""
             lines.append(
-                f"mpirun -n {spec.n_tasks} {pw_bin} -in {PW_INPUT} > {PW_OUTPUT} 2>&1"
+                f"{launcher} {self._pw_bin()} {pw_flags}-in {PW_INPUT} "
+                f"> {PW_OUTPUT} 2>&1"
             )
         return "\n".join(lines)
+
+    def _pw_bin(self) -> str:
+        return self.options.get("pw_bin") or (
+            getattr(self.cluster, "pw_bin", "pw.x") if self.cluster else "pw.x"
+        )
 
     # -------------------------------------------------------------- labeling
 
@@ -242,9 +269,7 @@ class QEEngine(DFTEngine):
     def _run_pwx(self, sd: Path) -> Atoms:
         from ase.io import read as ase_read
 
-        pw_bin = self.options.get("pw_bin") or (
-            getattr(self.cluster, "pw_bin", "pw.x") if self.cluster else "pw.x"
-        )
+        pw_bin = self._pw_bin()
         ntasks = int(self.options.get("local_ntasks", 1))
         cmd = shlex.split(str(pw_bin)) + ["-in", PW_INPUT]
         if ntasks > 1:

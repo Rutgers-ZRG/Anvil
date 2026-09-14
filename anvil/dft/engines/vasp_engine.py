@@ -85,8 +85,9 @@ class VaspEngine(DFTEngine):
         spec = self._job_spec(struct_dir)
         lines = [
             *self._module_lines(),
+            *self._env_lines(),
             f"cd {struct_dir}",
-            f"mpirun -n {spec.n_tasks} {vasp_bin} > vasp.log 2>&1",
+            f"{self._launcher(spec.n_tasks)} {vasp_bin} > vasp.log 2>&1",
         ]
         return "\n".join(lines)
 

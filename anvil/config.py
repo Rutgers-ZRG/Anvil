@@ -262,10 +262,6 @@ def _validate_dft(cfg: AnvilConfig) -> None:
                 f"`dft.engine_options.pseudopotentials` is missing entries for "
                 f"{missing} (engine 'qe' needs one UPF per element)"
             )
-        if not opts.get("pseudo_dir"):
-            raise ConfigError(
-                "`dft.engine_options.pseudo_dir` is required for engine 'qe'"
-            )
     elif engine == "ase":
         if not opts.get("calculator"):
             raise ConfigError(

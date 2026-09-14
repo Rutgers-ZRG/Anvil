@@ -347,3 +347,52 @@ def test_runner_uses_a_real_interpreter_path(tmp_path):
     assert "/opt/conda/envs/qepy/bin/python -m anvil.dft.engines._run" in (
         override.make_job_script(sd)[0].read_text()
     )
+
+
+# ------------------------------------------- cluster-specific job rendering
+
+
+def test_amareln_qe_job_matches_the_cluster_conventions(tmp_path):
+    """QE on amareln: srun launcher, its own intel module, group QE 7.2 build.
+
+    VASP on the same cluster keeps mpirun and intel/17.0.4 — the two engines
+    must not share a launcher.
+    """
+    from anvil.config import load_config
+    from anvil.hpc.clusters import get_cluster
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[2]
+    cfg = load_config(root / "configs" / "examples" / "si_qe_amareln.yaml")
+    cluster = get_cluster("amareln")
+    engine = make_engine(cfg.dft, cluster=cluster)
+
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    body = engine.make_job_script(sd)[0].read_text()
+
+    assert "srun --mpi=pmi2 /home/lz432/apps/q-e-qe-7.2/bin/pw.x -pd .true. -in pw.in" in body
+    assert "module purge" in body
+    assert "module load intel/17.0.2" in body       # QE build, not VASP's 17.0.4
+    assert "ulimit -s unlimited" in body
+    assert "export OMP_NUM_THREADS=1" in body
+    assert "#SBATCH --mem-per-cpu=4GB" in body
+    assert "mpirun" not in body
+
+    # pseudo_dir comes from the cluster registry, not the yaml
+    assert "'/home/mw1134/projects/qe_potential'" in (sd / "pw.in").read_text()
+
+    # ...while VASP on the same cluster is untouched
+    vasp_engine = VaspEngine(cluster=cluster, cat_potcar=False)
+    vsd = tmp_path / "vasp_0000"
+    vasp_engine.write_inputs(bulk("Si", "diamond", a=5.43), vsd)
+    vbody = vasp_engine.make_job_script(vsd)[0].read_text()
+    assert "mpirun -n 32 /home/lz432/apps/vasp.6.4.2/bin/vasp_std" in vbody
+    assert "module load intel/17.0.4" in vbody
+    assert "srun" not in vbody
+
+
+def test_qe_without_any_pseudo_dir_fails_loudly(tmp_path):
+    engine = QEEngine(options={"pseudopotentials": {"Si": "si.UPF"}})
+    with pytest.raises(EngineError, match="No pseudopotential directory"):
+        engine.write_inputs(bulk("Si", "diamond", a=5.43), tmp_path / "s")

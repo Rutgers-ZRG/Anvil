@@ -23,6 +23,7 @@ class SlurmJobSpec:
     n_nodes: int = 1
     cpus_per_task: int = 1
     mem: str = "8G"
+    mem_per_cpu: str = ""                 # if set, replaces --mem
     time: str = "01:00:00"
     output: str = "%x_%j.out"
     error: str = "%x_%j.err"
@@ -37,7 +38,8 @@ class SlurmJobSpec:
             f"#SBATCH --nodes={self.n_nodes}",
             f"#SBATCH --ntasks={self.n_tasks}",
             f"#SBATCH --cpus-per-task={self.cpus_per_task}",
-            f"#SBATCH --mem={self.mem}",
+            (f"#SBATCH --mem-per-cpu={self.mem_per_cpu}" if self.mem_per_cpu
+             else f"#SBATCH --mem={self.mem}"),
             f"#SBATCH --time={self.time}",
             f"#SBATCH --output={self.output}",
             f"#SBATCH --error={self.error}",

@@ -127,6 +127,7 @@ class DFTEngine(ABC):
             partition=partition,
             n_tasks=int(sl.get("ntasks", 32)),
             mem=sl.get("mem", "64G"),
+            mem_per_cpu=sl.get("mem_per_cpu", ""),
             time=sl.get("time", "03:00:00"),
             output=str(struct_dir / "slurm.out"),
             error=str(struct_dir / "slurm.err"),
@@ -154,12 +155,42 @@ class DFTEngine(ABC):
         """
         return self.options.get("python_bin") or sys.executable or "python3"
 
+    def _default_modules(self) -> list[str]:
+        """Modules to load when the user did not name any."""
+        return [self.cluster.intel_module] if self.cluster else []
+
     def _module_lines(self) -> list[str]:
-        """`module load` lines from options, else the cluster's intel module."""
-        mods = self.options.get("slurm", {}).get("module_loads")
+        """`module purge` / `module load` lines for the job body."""
+        sl = self.options.get("slurm") or {}
+        mods = sl.get("module_loads")
         if mods is None:
-            mods = [self.cluster.intel_module] if self.cluster else []
-        return [f"module load {m}" for m in mods]
+            mods = self._default_modules()
+        lines = ["module purge"] if sl.get("module_purge", False) else []
+        lines += [f"module load {m}" for m in mods]
+        return lines
+
+    def _env_lines(self) -> list[str]:
+        """`ulimit` / `export` / arbitrary pre-commands from options['slurm'].
+
+        QE builds on Amarel need `ulimit -s unlimited` and single-threaded MKL;
+        `pre_commands` is the escape hatch for anything else a site needs.
+        """
+        sl = self.options.get("slurm") or {}
+        lines: list[str] = []
+        if sl.get("ulimit_stack_unlimited", False):
+            lines.append("ulimit -s unlimited")
+        env = sl.get("env") or {}
+        for k, v in env.items():
+            lines.append(f"export {k}={v}")
+        lines.extend(sl.get("pre_commands") or [])
+        return lines
+
+    def _launcher(self, n_tasks: int) -> str:
+        """MPI launch prefix, e.g. "mpirun -n 32" or "srun --mpi=pmi2"."""
+        template = self.options.get("launcher") or (
+            self.cluster.mpi_launcher if self.cluster else "mpirun -n {n}"
+        )
+        return template.format(n=n_tasks) if "{n}" in template else template
 
     def _conda_lines(self) -> list[str]:
         """Activate the DFT conda env when the cluster/options define one."""
