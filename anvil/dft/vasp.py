@@ -80,16 +80,20 @@ def render_incar(template: dict, encut: int, extra: dict | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_kpoints(
+def kpoint_mesh(
     atoms: Atoms,
     kspacing: float = 0.25,
     *,
     max_total_kpts: int = 500,
-) -> str:
-    """Generate gamma-centered KPOINTS by reciprocal-space density.
+) -> list[int]:
+    """Gamma-centered mesh dimensions from a reciprocal-space density.
 
     `kspacing` is the target spacing in 1/Å (smaller → denser mesh).
     `max_total_kpts` caps the total count for degenerate cells (PI convention).
+
+    Engine-independent: the VASP KPOINTS writer and the Quantum ESPRESSO /
+    ASE engines all go through this so a given `dft.kspacing` means the same
+    mesh whichever backend labels the structure.
     """
     cell = atoms.get_cell()
     rec = np.linalg.norm(cell.reciprocal(), axis=1)
@@ -102,6 +106,17 @@ def render_kpoints(
     if total > max_total_kpts:
         scale = (max_total_kpts / total) ** (1.0 / 3.0)
         kpts = [max(1, int(round(k * scale))) for k in kpts]
+    return kpts
+
+
+def render_kpoints(
+    atoms: Atoms,
+    kspacing: float = 0.25,
+    *,
+    max_total_kpts: int = 500,
+) -> str:
+    """Generate a gamma-centered KPOINTS file from `kpoint_mesh`."""
+    kpts = kpoint_mesh(atoms, kspacing, max_total_kpts=max_total_kpts)
     return (
         "Automatic mesh\n"
         "0\n"

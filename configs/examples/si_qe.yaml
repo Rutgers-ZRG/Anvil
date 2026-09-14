@@ -1,0 +1,41 @@
+# Anvil example: silicon labeled with Quantum ESPRESSO instead of VASP.
+# Same loop, same regimes as si.yaml — only the DFT engine differs.
+
+system: si_qe
+elements: [Si]
+
+seeds:
+  from_local:
+    - data/si_seeds/si_diamond.vasp
+    - data/si_seeds/si_beta_tin.vasp
+
+dft:
+  engine: qe                       # vasp | qe | ase
+  kspacing: 0.25                   # same meaning as for VASP (see kpoint_mesh)
+  engine_options:
+    mode: qepy                     # qepy = in-process via QEpy; pwx = batch pw.x
+    pseudo_dir: /home/lz432/apps/qe_pseudo
+    pseudopotentials:
+      Si: Si.pbe-n-kjpaw_psl.1.0.0.UPF
+    input_data:
+      system:
+        ecutwfc: 60
+        ecutrho: 480
+        occupations: smearing
+        smearing: gaussian
+        degauss: 0.01
+      electrons:
+        conv_thr: 1.0e-8
+    slurm:
+      partition: main
+      ntasks: 32
+      mem: 64G
+      time: "03:00:00"
+
+regime:
+  pressures_gpa: [0, 5, 10, 15, 20]
+  temperatures_k: [300, 1000, 3000]
+
+budget:
+  max_dft_calls: 600
+  max_walltime_h: 36

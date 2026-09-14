@@ -57,10 +57,13 @@ seeds:
   # Or: from_local: [./poscars/*.vasp]
 
 dft:
+  engine: vasp               # vasp (default) | qe | ase — see §4.3
   functional: r2scan_rvv10   # built-in INCAR template; see configs/functionals/
   encut: 600
   kspacing: 0.25             # default: a/x for x-density
   # extra INCAR overrides via dft.extra_incar: {NPAR: 4, ...}
+  # engine-specific settings (pseudos, ASE calculator, ...) go in
+  # dft.engine_options; see configs/examples/si_qe.yaml, si_ase.yaml
 
 regime:                       # the "where do I want it accurate" box
   pressures_gpa: [0, 10, 30, 60, 100]
@@ -275,16 +278,63 @@ ROUND_r_DFT_DONE → ROUND_r_TRAIN → ROUND_r_TRAINED → ROUND_r_VALIDATED →
 `resume` reads `state.json`, jumps to the matching state, idempotently re-runs
 incomplete steps. Any state can be re-entered without corruption.
 
-### 4.3 `anvil.dft.vasp`
+### 4.3 `anvil.dft` — pluggable labeling engines
+
+The loop needs only four things from a DFT code, so that is the whole
+`DFTEngine` contract (`anvil/dft/engines/base.py`):
+
+```python
+engine.write_inputs(atoms, struct_dir, sample_kind=..., pool=...)
+engine.submit(struct_dirs, max_concurrent=..., ssh_host=...)   # → job ids
+engine.is_converged(struct_dir)                                # idempotency
+engine.collect(struct_dirs)                                    # → labeled Atoms
+```
+
+`dft.engine` picks the backend; `dft.engine_options` is its settings block.
+The orchestrator never names a code.
+
+| `dft.engine` | Backend | Notes |
+|---|---|---|
+| `vasp` (default) | VASP + Slurm | v1 path, behaviour unchanged |
+| `qe` | Quantum ESPRESSO | `mode: qepy` runs in-process via QEpy; `mode: pwx` shells out to `pw.x` |
+| `ase` | any ASE calculator | GPAW, CP2K, Abinit, FHI-aims, xTB, EMT (smoke tests) |
+
+Shared by every engine:
+
+- One struct dir per structure, with `.anvil_meta.json` recording the engine,
+  its options, and the `sample_kind` / `pool` provenance. That file is enough
+  to rebuild the engine on a compute node, which is how
+  `python -m anvil.dft.engines._run <struct_dir>` works.
+- `kpoint_mesh()` — one k-density convention for all codes, so `dft.kspacing`
+  means the same mesh whichever backend labels the structure.
+- Collection checks: convergence, finite energy, |F| sanity cap, and ASE
+  (compression-negative) stress tagging — see §10.
+- Idempotent submission: a dir with a converged result is skipped, not
+  resubmitted; throttled below the cluster queue cap.
+
+VASP specifics (`anvil.dft.vasp`):
 
 - INCAR templates per functional (`r2scan_rvv10`, `pbe`, `scan`, `pbe_d3`).
   Templates inherit from PI's existing `*_setup_vasp.py` scripts.
 - KPOINTS generator with k-density, max-kpts cap (PI's convention).
 - POTCAR auto-resolution from `/home/lz432/apps/PBE64/<element>/POTCAR`.
-- Slurm wrapper with throttled submit (queue-cap aware).
-- Output validation: convergence + |F| sanity + extxyz collection.
-- Idempotency: re-running a struct dir checks for existing converged OUTCAR
-  before re-submitting.
+- Results read from `vasprun.xml`; convergence from `OUTCAR`.
+
+QE specifics (`anvil.dft.engines.qe`):
+
+- `pw.in` written with `ase.io.espresso`; per-element UPFs from
+  `engine_options.pseudopotentials`, `tprnfor`/`tstress` on by default.
+- `mode: qepy` submits `mpirun -n N python -m anvil.dft.engines._run <dir>`,
+  so the SCF still runs on compute nodes under MPI while QEpy keeps a Python
+  handle on the QE state (v2: forces during MD labeling without file I/O).
+- `mode: pwx` needs no QEpy — just a `pw.x` binary.
+
+ASE-calculator specifics (`anvil.dft.engines.ase_calc`):
+
+- `engine_options.calculator` is an import path (`gpaw.GPAW`) or a shortcut
+  (`emt`, `cp2k`, `abinit`, ...); `kwargs` is passed to its constructor.
+- Results are written as `anvil_result.xyz` (extxyz + SinglePointCalculator),
+  the same file the QEpy path produces — so collection is engine-independent.
 
 ### 4.4 `anvil.ml.foundation`
 
@@ -490,9 +540,15 @@ extrapolating into regions where the model was never tested.
 │   ├── config.py            # yaml loader + schema validation
 │   ├── state.py             # state machine + checkpointing
 │   ├── dft/
-│   │   ├── vasp.py
-│   │   ├── runner.py
-│   │   └── validate.py
+│   │   ├── vasp.py          # INCAR / KPOINTS / POSCAR / POTCAR writers
+│   │   ├── runner.py        # back-compat wrappers over the VASP engine
+│   │   ├── validate.py
+│   │   └── engines/         # pluggable backends
+│   │       ├── base.py      # DFTEngine contract + shared collection checks
+│   │       ├── vasp_engine.py
+│   │       ├── qe.py        # Quantum ESPRESSO via QEpy or pw.x
+│   │       ├── ase_calc.py  # any ASE calculator
+│   │       └── _run.py      # compute-node entry point
 │   ├── ml/
 │   │   ├── foundation.py
 │   │   ├── ensemble.py
@@ -531,6 +587,8 @@ extrapolating into regions where the model was never tested.
 │   └── examples/
 │       ├── carbon.yaml
 │       ├── si.yaml
+│       ├── si_qe.yaml       # same run, Quantum ESPRESSO engine
+│       ├── si_ase.yaml      # same run, generic ASE calculator
 │       └── nacl.yaml
 ├── tests/
 │   ├── unit/

@@ -23,10 +23,20 @@ class SeedConfig:
 
 @dataclass
 class DFTConfig:
+    """Labeling backend + its settings.
+
+    `engine` selects the code that produces energies/forces/stresses:
+    "vasp" (default), "qe" (Quantum ESPRESSO via QEpy or pw.x), or "ase"
+    (any ASE calculator). `functional`/`encut`/`extra_incar` are VASP-side
+    knobs; everything engine-specific lives in `engine_options`.
+    See anvil/dft/engines/ and DESIGN.md §4.3.
+    """
+    engine: str = "vasp"
     functional: str = "pbe"
     encut: int = 600
     kspacing: float = 0.25
     extra_incar: dict = field(default_factory=dict)
+    engine_options: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -204,6 +214,8 @@ def validate_config(cfg: AnvilConfig) -> None:
     if s.from_mp and s.from_local:
         raise ConfigError("`seeds` cannot specify both from_mp and from_local")
 
+    _validate_dft(cfg)
+
     if cfg.validation.tier not in (1, 2, 3):
         raise ConfigError(f"`validation.tier` must be 1, 2, or 3 (got {cfg.validation.tier})")
 
@@ -224,6 +236,42 @@ def validate_config(cfg: AnvilConfig) -> None:
             f"Sum of generation quotas ({total_quota}) exceeds per_round_dft "
             f"({cfg.training.per_round_dft})"
         )
+
+
+def _validate_dft(cfg: AnvilConfig) -> None:
+    """Check `dft.engine` and the engine-specific options block."""
+    from anvil.dft.engines import ENGINES
+
+    engine = str(cfg.dft.engine).lower()
+    if engine not in ENGINES:
+        raise ConfigError(
+            f"Unknown `dft.engine` {cfg.dft.engine!r}. Known: {sorted(set(ENGINES))}"
+        )
+    opts = cfg.dft.engine_options or {}
+
+    if engine in ("qe", "espresso", "qepy"):
+        mode = str(opts.get("mode", "qepy")).lower()
+        if mode not in ("qepy", "pwx"):
+            raise ConfigError(
+                f"`dft.engine_options.mode` must be 'qepy' or 'pwx' (got {mode!r})"
+            )
+        pseudos = opts.get("pseudopotentials") or {}
+        missing = [el for el in cfg.elements if el not in pseudos]
+        if missing:
+            raise ConfigError(
+                f"`dft.engine_options.pseudopotentials` is missing entries for "
+                f"{missing} (engine 'qe' needs one UPF per element)"
+            )
+        if not opts.get("pseudo_dir"):
+            raise ConfigError(
+                "`dft.engine_options.pseudo_dir` is required for engine 'qe'"
+            )
+    elif engine == "ase":
+        if not opts.get("calculator"):
+            raise ConfigError(
+                "`dft.engine_options.calculator` is required for engine 'ase' "
+                "(e.g. 'gpaw.GPAW', 'ase.calculators.cp2k.CP2K', or 'emt')"
+            )
 
 
 def to_canonical_json(cfg: AnvilConfig) -> str:

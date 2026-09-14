@@ -1,0 +1,35 @@
+# Anvil example: labeling through a generic ASE calculator (here GPAW).
+# Any code with an ASE calculator works — CP2K, Abinit, FHI-aims, xTB, or
+# `calculator: emt` for a zero-cost pipeline smoke test.
+
+system: si_ase
+elements: [Si]
+
+seeds:
+  from_local:
+    - data/si_seeds/si_diamond.vasp
+
+dft:
+  engine: ase
+  kspacing: 0.25
+  engine_options:
+    calculator: gpaw.GPAW          # "module.path.ClassName" or a shortcut name
+    use_kpts: true                 # pass kpts= built from dft.kspacing
+    mpi_python: true               # GPAW parallelises the Python process itself
+    kwargs:
+      mode: {name: pw, ecut: 600}
+      xc: PBE
+      txt: gpaw.out
+    slurm:
+      partition: main
+      ntasks: 32
+      mem: 64G
+      time: "03:00:00"
+
+regime:
+  pressures_gpa: [0, 10]
+  temperatures_k: [300, 1000]
+
+budget:
+  max_dft_calls: 200
+  max_walltime_h: 12

@@ -22,6 +22,9 @@ class ClusterConfig:
     foundation_path: str = ""
     vasp_bin: str = "/home/lz432/apps/vasp.6.4.2/bin/vasp_std"
     potcar_root: str = "/home/lz432/apps/PBE64"
+    pw_bin: str = "pw.x"                           # Quantum ESPRESSO
+    qe_pseudo_root: str = ""                       # UPF directory for engine "qe"
+    conda_env_dft: str = ""                        # env holding qepy / ASE backends
     intel_module: str = "intel/17.0.4"
     scratch_root: str = "/scratch/lz432"
     requires_chdir: bool = False                   # amarel3: True

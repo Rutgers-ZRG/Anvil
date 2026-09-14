@@ -40,6 +40,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Quantum ESPRESSO engine (dft.engine: qe, mode: qepy). QEpy ships prebuilt
+# wheels for common QE versions; mode "pwx" needs only a pw.x binary.
+qe = [
+    "qepy",
+    "mpi4py",
+]
 dev = [
     "pytest>=7",
     "pytest-cov",
