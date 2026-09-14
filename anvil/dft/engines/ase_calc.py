@@ -124,7 +124,7 @@ class ASECalculatorEngine(DFTEngine):
 
     def _job_body(self, struct_dir: Path) -> str:
         spec = self._job_spec(struct_dir)
-        python_bin = self.options.get("python_bin", "python")
+        python_bin = self._python_bin()
         runner = (
             f"{python_bin} -m anvil.dft.engines._run {shlex.quote(str(struct_dir))}"
         )

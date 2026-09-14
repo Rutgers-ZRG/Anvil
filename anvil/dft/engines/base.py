@@ -24,6 +24,7 @@ See DESIGN.md §4.3.
 from __future__ import annotations
 
 import json
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -141,6 +142,17 @@ class DFTEngine(ABC):
         script.write_text(spec.render(self._job_body(sd)))
         script.chmod(0o755)
         return script, spec
+
+    def _python_bin(self) -> str:
+        """Interpreter for the compute-node runner.
+
+        Defaults to the interpreter running Anvil (`sys.executable`) rather
+        than bare "python": under Slurm the job may start outside the conda
+        env, and many systems only ship `python3`. Override with
+        `engine_options.python_bin` when the compute node sees a different
+        path than the submit host.
+        """
+        return self.options.get("python_bin") or sys.executable or "python3"
 
     def _module_lines(self) -> list[str]:
         """`module load` lines from options, else the cluster's intel module."""

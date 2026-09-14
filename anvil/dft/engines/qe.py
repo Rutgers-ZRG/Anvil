@@ -172,7 +172,7 @@ class QEEngine(DFTEngine):
         spec = self._job_spec(struct_dir)
         lines = [*self._module_lines(), *self._conda_lines(), f"cd {struct_dir}"]
         if self.mode == "qepy":
-            python_bin = self.options.get("python_bin", "python")
+            python_bin = self._python_bin()
             lines.append(
                 f"mpirun -n {spec.n_tasks} {python_bin} -m anvil.dft.engines._run "
                 f"{shlex.quote(str(struct_dir))} > qepy.log 2>&1"

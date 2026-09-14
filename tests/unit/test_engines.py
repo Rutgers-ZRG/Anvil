@@ -331,3 +331,19 @@ def test_runner_wrappers_still_work(tmp_path):
     assert "#SBATCH --job-name=job42" in body
     assert spec.n_tasks == 8
     assert not is_converged(sd)
+
+
+def test_runner_uses_a_real_interpreter_path(tmp_path):
+    """Job scripts must not assume a bare `python` exists on the node."""
+    import sys
+
+    engine = _qe_engine(mode="qepy")
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    assert sys.executable in engine.make_job_script(sd)[0].read_text()
+
+    override = _qe_engine(mode="qepy", python_bin="/opt/conda/envs/qepy/bin/python")
+    override.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    assert "/opt/conda/envs/qepy/bin/python -m anvil.dft.engines._run" in (
+        override.make_job_script(sd)[0].read_text()
+    )
