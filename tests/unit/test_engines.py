@@ -467,3 +467,16 @@ def test_ase_engine_serial_calculator_has_no_launcher(tmp_path):
     engine.write_inputs(bulk("Cu", "fcc", a=3.6), sd)
     body = engine.make_job_script(sd)[0].read_text()
     assert "srun" not in body and "mpirun" not in body
+
+
+def test_empty_launcher_means_no_mpi_wrapper(tmp_path):
+    """Serial builds (the PyPI QEpy wheel) must not be started under srun."""
+    from anvil.hpc.clusters import get_cluster
+
+    engine = _qe_engine(mode="qepy", launcher="", slurm={"ntasks": 1})
+    engine.cluster = get_cluster("amareln")          # cluster would say srun
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    body = engine.make_job_script(sd)[0].read_text()
+    assert "srun" not in body and "mpirun" not in body
+    assert "-m anvil.dft.engines._run" in body

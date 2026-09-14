@@ -186,10 +186,15 @@ class DFTEngine(ABC):
         return lines
 
     def _launcher(self, n_tasks: int) -> str:
-        """MPI launch prefix, e.g. "mpirun -n 32" or "srun --mpi=pmi2"."""
-        template = self.options.get("launcher") or (
-            self.cluster.mpi_launcher if self.cluster else "mpirun -n {n}"
-        )
+        """MPI launch prefix, e.g. "mpirun -n 32" or "srun --mpi=pmi2".
+
+        An explicit empty `launcher` means "run it bare" — needed for serial
+        builds such as the PyPI QEpy wheel, which must not be started under
+        srun/mpirun. Hence the `is not None` check rather than truthiness.
+        """
+        template = self.options.get("launcher")
+        if template is None:
+            template = self.cluster.mpi_launcher if self.cluster else "mpirun -n {n}"
         return template.format(n=n_tasks) if "{n}" in template else template
 
     def _conda_lines(self) -> list[str]:

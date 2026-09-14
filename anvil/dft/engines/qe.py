@@ -180,7 +180,7 @@ class QEEngine(DFTEngine):
 
     def _launcher(self, n_tasks: int) -> str:
         """`qe_launcher` wins over the cluster-wide (VASP) `mpi_launcher`."""
-        if not self.options.get("launcher") and self.cluster:
+        if self.options.get("launcher") is None and self.cluster:
             qe_launcher = getattr(self.cluster, "qe_launcher", "")
             if qe_launcher:
                 return (qe_launcher.format(n=n_tasks) if "{n}" in qe_launcher
