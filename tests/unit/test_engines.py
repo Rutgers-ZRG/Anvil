@@ -421,3 +421,49 @@ def test_amarel3_uses_srun_and_an_intel_module_that_exists(tmp_path):
     assert "module load intel/17.0.2" in body
     assert "mpirun" not in body
     assert "#SBATCH --chdir=" in body                # /cache/home default
+
+
+# ------------------------------------------- ASE engine: objects + launcher
+
+
+def test_ase_kwargs_build_nested_objects():
+    """`__object__` lets yaml express calculators that need Python objects."""
+    from ase.calculators.espresso import EspressoProfile
+
+    from anvil.dft.engines.ase_calc import build_kwargs
+
+    built = build_kwargs({
+        "pseudopotentials": {"Si": "si.UPF"},
+        "profile": {
+            "__object__": "ase.calculators.espresso.EspressoProfile",
+            "command": "srun --mpi=pmi2 pw.x",
+            "pseudo_dir": "/pseudos",
+        },
+    })
+    assert isinstance(built["profile"], EspressoProfile)
+    assert built["pseudopotentials"] == {"Si": "si.UPF"}   # plain values untouched
+
+
+def test_ase_engine_follows_the_cluster_launcher(tmp_path):
+    """mpi_python must use srun on clusters that require it, not mpirun."""
+    from anvil.hpc.clusters import get_cluster
+
+    engine = ASECalculatorEngine(
+        cluster=get_cluster("amareln"),
+        options={"calculator": "gpaw.GPAW", "mpi_python": True,
+                 "slurm": {"ntasks": 16}},
+    )
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    body = engine.make_job_script(sd)[0].read_text()
+    assert "srun --mpi=pmi2" in body
+    assert "mpirun" not in body
+
+
+def test_ase_engine_serial_calculator_has_no_launcher(tmp_path):
+    """Calculators that spawn their own MPI job must not be wrapped."""
+    engine = ASECalculatorEngine(options={"calculator": "emt"})
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Cu", "fcc", a=3.6), sd)
+    body = engine.make_job_script(sd)[0].read_text()
+    assert "srun" not in body and "mpirun" not in body

@@ -18,6 +18,16 @@ Config sketch::
         use_kpts: true                     # pass kpts= from dft.kspacing
         slurm: {ntasks: 32, mem: 64G, time: "03:00:00"}
 
+Calculators that need Python objects rather than plain values take an
+`__object__` key naming the class to build::
+
+    calculator: ase.calculators.espresso.Espresso
+    kwargs:
+      profile:
+        __object__: ase.calculators.espresso.EspressoProfile
+        command: "srun --mpi=pmi2 /path/to/pw.x"
+        pseudo_dir: /path/to/pseudos
+
 The structure is written as `input.xyz`; the calculator spec is recorded in
 `.anvil_meta.json` so `python -m anvil.dft.engines._run <struct_dir>` can
 rebuild the calculator on a compute node. Results land in `anvil_result.xyz`
@@ -50,6 +60,33 @@ CALCULATOR_SHORTCUTS: dict[str, str] = {
     "aims": "ase.calculators.aims.Aims",
     "vasp": "ase.calculators.vasp.Vasp",
 }
+
+
+OBJECT_KEY = "__object__"
+
+
+def build_kwargs(spec):
+    """Recursively turn yaml into calculator kwargs.
+
+    Any mapping carrying an `__object__` key is instantiated::
+
+        profile:
+          __object__: ase.calculators.espresso.EspressoProfile
+          command: "srun --mpi=pmi2 pw.x"
+          pseudo_dir: /path/to/pseudos
+
+    which is what calculators like Espresso (profile=) and GPAW (mode=) need
+    and plain yaml cannot otherwise express.
+    """
+    if isinstance(spec, dict):
+        if OBJECT_KEY in spec:
+            cls = resolve_calculator_class(spec[OBJECT_KEY])
+            rest = {k: build_kwargs(v) for k, v in spec.items() if k != OBJECT_KEY}
+            return cls(**rest)
+        return {k: build_kwargs(v) for k, v in spec.items()}
+    if isinstance(spec, (list, tuple)):
+        return type(spec)(build_kwargs(v) for v in spec)
+    return spec
 
 
 def resolve_calculator_class(spec: str):
@@ -129,11 +166,12 @@ class ASECalculatorEngine(DFTEngine):
             f"{python_bin} -m anvil.dft.engines._run {shlex.quote(str(struct_dir))}"
         )
         # Most ASE calculators drive their own MPI binary; only launch the
-        # Python process under mpirun when the user asks for it (GPAW, QEpy).
+        # Python process itself under MPI when the user asks for it (GPAW).
         if self.options.get("mpi_python", False):
-            runner = f"mpirun -n {spec.n_tasks} {runner}"
+            runner = f"{self._launcher(spec.n_tasks)} {runner}"
         return "\n".join([
             *self._module_lines(),
+            *self._env_lines(),
             *self._conda_lines(),
             f"cd {struct_dir}",
             f"{runner} > ase_calc.log 2>&1",
@@ -149,7 +187,7 @@ class ASECalculatorEngine(DFTEngine):
         if kwargs is None:
             kwargs = dict(self.calc_kwargs)
         cls = resolve_calculator_class(spec)
-        return cls(**kwargs)
+        return cls(**build_kwargs(kwargs))
 
     def run_local(self, struct_dir: str | Path) -> Atoms:
         from ase.calculators.singlepoint import SinglePointCalculator
