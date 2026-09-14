@@ -387,9 +387,17 @@ def test_amareln_qe_job_matches_the_cluster_conventions(tmp_path):
     vsd = tmp_path / "vasp_0000"
     vasp_engine.write_inputs(bulk("Si", "diamond", a=5.43), vsd)
     vbody = vasp_engine.make_job_script(vsd)[0].read_text()
-    assert "mpirun -n 32 /home/lz432/apps/vasp.6.4.2/bin/vasp_std" in vbody
-    assert "module load intel/17.0.4" in vbody
-    assert "srun" not in vbody
+    assert "srun --mpi=pmi2 /home/lz432/apps/vasp.6.4.2/bin/vasp_std" in vbody
+    assert "module load intel/17.0.4" in vbody      # VASP build, not QE's 17.0.2
+    assert "mpirun" not in vbody
+
+
+def test_default_launcher_is_mpirun_when_the_cluster_says_nothing(tmp_path):
+    """Only clusters that declare otherwise get srun."""
+    engine = VaspEngine(cluster=_dummy_cluster(), cat_potcar=False)
+    sd = tmp_path / "struct_0000"
+    engine.write_inputs(bulk("Si", "diamond", a=5.43), sd)
+    assert "mpirun -n 32 /apps/vasp_std" in engine.make_job_script(sd)[0].read_text()
 
 
 def test_qe_without_any_pseudo_dir_fails_loudly(tmp_path):

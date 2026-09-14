@@ -19,6 +19,10 @@ CLUSTER = ClusterConfig(
     ),
     vasp_bin="/home/lz432/apps/vasp.6.4.2/bin/vasp_std",
     potcar_root="/home/lz432/apps/PBE64",
+    # Intel MPI's mpirun segfaults in MPI_Init under Slurm here (verified:
+    # job 5899267 SIGSEGV, 5899268 converged after switching). Launch VASP
+    # through srun, as the group's QE jobs already do.
+    mpi_launcher="srun --mpi=pmi2",
     # Quantum ESPRESSO 7.2 (group build). Note it is compiled against
     # intel/17.0.2, not the intel/17.0.4 the VASP jobs load, and the working
     # QE jobs on this cluster launch with `srun --mpi=pmi2` rather than mpirun.
