@@ -40,6 +40,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Quantum ESPRESSO engine (dft.engine: qe, mode: qepy). The PyPI wheel is a
+# serial build; for MPI, install QEpy from source against a -fPIC QE 7.2
+# (https://qepy.rutgers.edu/install.html). mode "pwx" needs only a pw.x binary.
+#
+# f90wrap is pinned: the qepy 7.2 wheels are built against f90wrap 0.2.x, and
+# 0.3.0 changed the Fortran array-handle size, so Driver.get_forces() dies with
+# "0-th dimension must be fixed to 2 but got 4" (energy and stress still work).
+qe = [
+    "qepy",
+    "f90wrap>=0.2.14,<0.3",
+    "mpi4py",
+]
 dev = [
     "pytest>=7",
     "pytest-cov",

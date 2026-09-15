@@ -23,6 +23,7 @@ class SlurmJobSpec:
     n_nodes: int = 1
     cpus_per_task: int = 1
     mem: str = "8G"
+    mem_per_cpu: str = ""                 # if set, replaces --mem
     time: str = "01:00:00"
     output: str = "%x_%j.out"
     error: str = "%x_%j.err"
@@ -37,7 +38,8 @@ class SlurmJobSpec:
             f"#SBATCH --nodes={self.n_nodes}",
             f"#SBATCH --ntasks={self.n_tasks}",
             f"#SBATCH --cpus-per-task={self.cpus_per_task}",
-            f"#SBATCH --mem={self.mem}",
+            (f"#SBATCH --mem-per-cpu={self.mem_per_cpu}" if self.mem_per_cpu
+             else f"#SBATCH --mem={self.mem}"),
             f"#SBATCH --time={self.time}",
             f"#SBATCH --output={self.output}",
             f"#SBATCH --error={self.error}",
@@ -138,6 +140,24 @@ def submit_throttled(
         jid = submit(sp, ssh_host=ssh_host)
         job_ids.append(jid)
     return job_ids
+
+
+def cancel(job_ids: list[str], *, ssh_host: Optional[str] = None) -> list[str]:
+    """scancel the given job ids; return the ids we actually asked about.
+
+    Ignores the "DONE"/"" placeholders that `submit()` uses for struct dirs it
+    skipped, and tolerates ids that already terminated.
+    """
+    ids = [j for j in job_ids if j and j != "DONE"]
+    if not ids:
+        return []
+    try:
+        _run(["scancel", *ids], ssh_host=ssh_host)
+    except SlurmError as exc:
+        # Already-finished jobs make scancel complain; not worth failing on.
+        if "Invalid job id" not in str(exc):
+            raise
+    return ids
 
 
 def poll(job_ids: list[str], *, ssh_host: Optional[str] = None) -> dict[str, str]:

@@ -121,6 +121,17 @@ class Orchestrator:
     def _save(self) -> None:
         save_checkpoint(self.run_dir, self.ckpt)
 
+    def _make_engine(self, *, cat_potcar: bool = True):
+        """The DFT engine selected by `dft.engine` (vasp / qe / ase)."""
+        from anvil.dft.engines import make_engine
+        from anvil.hpc.clusters import get_cluster
+
+        return make_engine(
+            self.config.dft,
+            cluster=get_cluster(self.cluster_name),
+            cat_potcar=cat_potcar,
+        )
+
     # ------------------------------------------------------------------
     # State transitions
     # ------------------------------------------------------------------
@@ -193,10 +204,6 @@ class Orchestrator:
         )
         from anvil.al.generation.reform_relax import (
             ReformRelaxConfig, generate_pool_b,
-        )
-        from anvil.dft.runner import submit_vasp_array
-        from anvil.dft.vasp import (
-            load_functional, make_vasp_inputs, write_vasp_dir,
         )
         from anvil.hpc.clusters import get_cluster
         from anvil.ml.foundation import FoundationRegistry
@@ -280,8 +287,8 @@ class Orchestrator:
             temperatures_k=self.config.regime.temperatures_k,
         )
 
-        # Write VASP inputs
-        functional = load_functional(self.config.dft.functional)
+        # Write DFT inputs with the configured engine (vasp / qe / ase)
+        engine = self._make_engine(cat_potcar=(do_submit and ssh_host is None))
         all_dirs: list[Path] = []
         labelled = (
             ("pool_a", pool_a),
@@ -295,19 +302,13 @@ class Orchestrator:
             label_dir = self.run_dir / label
             label_dir.mkdir(exist_ok=True)
             for i, atoms in enumerate(atoms_list):
-                inp = make_vasp_inputs(
+                sdir = label_dir / f"struct_{i:04d}"
+                engine.write_inputs(
                     atoms,
-                    functional=self.config.dft.functional,
-                    encut=self.config.dft.encut,
-                    kspacing=self.config.dft.kspacing,
-                    extra_incar=self.config.dft.extra_incar or None,
-                    potcar_root=cluster_cfg.potcar_root,
+                    sdir,
                     sample_kind=atoms.info.get("sample_kind", ""),
                     pool=atoms.info.get("pool", label),
                 )
-                sdir = label_dir / f"struct_{i:04d}"
-                cat = do_submit and ssh_host is None
-                write_vasp_dir(inp, sdir, cat_potcar=cat)
                 all_dirs.append(sdir)
 
         # Persist struct dir manifest grouped by pool for collect step
@@ -329,10 +330,8 @@ class Orchestrator:
         )
 
         if do_submit:
-            job_ids = submit_vasp_array(
+            job_ids = engine.submit(
                 all_dirs,
-                cluster=cluster_cfg,
-                functional_yaml=functional,
                 max_concurrent=max_concurrent,
                 ssh_host=ssh_host,
             )
@@ -354,9 +353,9 @@ class Orchestrator:
         Both xyz files carry pool / phase / sample_kind metadata.
         """
         import json as _json
-        from anvil.dft.runner import collect_vasp_outputs
         from ase.io import write as ase_write
 
+        engine = self._make_engine()
         manifest = _json.loads((self.run_dir / "bootstrap_manifest.json").read_text())
 
         train_atoms = []
@@ -365,11 +364,11 @@ class Orchestrator:
             dirs = manifest.get(pool_label, [])
             if not dirs:
                 continue
-            atoms_list, failed = collect_vasp_outputs(dirs)
+            atoms_list, failed = engine.collect(dirs)
             train_atoms.extend(atoms_list)
             train_failed.extend(failed)
 
-        val_atoms, val_failed = collect_vasp_outputs(manifest.get("validation", []))
+        val_atoms, val_failed = engine.collect(manifest.get("validation", []))
 
         train_xyz = self.run_dir / "train.xyz"
         val_xyz = self.run_dir / "val.xyz"
@@ -719,10 +718,6 @@ class Orchestrator:
                          max_concurrent: int = 400) -> None:
         """ROUND_DFT_QUEUED: write VASP inputs + submit for the round's selected pool."""
         import json as _json
-        from anvil.dft.runner import submit_vasp_array
-        from anvil.dft.vasp import (
-            load_functional, make_vasp_inputs, write_vasp_dir,
-        )
         from anvil.hpc.clusters import get_cluster
         from ase.io import read as ase_read
 
@@ -733,33 +728,28 @@ class Orchestrator:
         atoms_list = ase_read(str(selected_xyz), index=":", format="extxyz")
 
         cluster_cfg = get_cluster(self.cluster_name)
-        functional = load_functional(self.config.dft.functional)
+        engine = self._make_engine(cat_potcar=(ssh_host is None))
 
         struct_dirs: list[Path] = []
-        vasp_root = round_dir / "vasp_jobs"
-        vasp_root.mkdir(exist_ok=True)
+        # Historically "vasp_jobs"; kept as the dir name so existing runs resume.
+        jobs_root = round_dir / "vasp_jobs"
+        jobs_root.mkdir(exist_ok=True)
         for i, atoms in enumerate(atoms_list):
-            inp = make_vasp_inputs(
+            sdir = jobs_root / f"struct_{i:04d}"
+            engine.write_inputs(
                 atoms,
-                functional=self.config.dft.functional,
-                encut=self.config.dft.encut,
-                kspacing=self.config.dft.kspacing,
-                extra_incar=self.config.dft.extra_incar or None,
-                potcar_root=cluster_cfg.potcar_root,
+                sdir,
                 sample_kind=atoms.info.get("sample_kind", ""),
                 pool=atoms.info.get("pool", ""),
             )
-            sdir = vasp_root / f"struct_{i:04d}"
-            write_vasp_dir(inp, sdir, cat_potcar=(ssh_host is None))
             struct_dirs.append(sdir)
 
         (round_dir / "struct_dirs.txt").write_text(
             "\n".join(str(d) for d in struct_dirs) + "\n"
         )
 
-        job_ids = submit_vasp_array(
-            struct_dirs, cluster=cluster_cfg, functional_yaml=functional,
-            max_concurrent=max_concurrent, ssh_host=ssh_host,
+        job_ids = engine.submit(
+            struct_dirs, max_concurrent=max_concurrent, ssh_host=ssh_host,
         )
         self.ckpt.pending_job_ids = list(job_ids)
         self.ckpt.dft_calls_used += len(struct_dirs)
@@ -769,13 +759,12 @@ class Orchestrator:
     def round_dft_done(self) -> None:
         """ROUND_DFT_DONE: collect VASP outputs + append to cumulative train.xyz."""
         import json as _json
-        from anvil.dft.runner import collect_vasp_outputs
         from ase.io import read as ase_read, write as ase_write
 
         round_dir = self.run_dir / f"round_{self.ckpt.round}"
         struct_dirs = (round_dir / "struct_dirs.txt").read_text().split()
 
-        new_atoms, failed = collect_vasp_outputs(struct_dirs)
+        new_atoms, failed = self._make_engine().collect(struct_dirs)
         # Append to existing train.xyz (cumulative pool)
         train_xyz = self.run_dir / "train.xyz"
         if train_xyz.exists():

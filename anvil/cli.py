@@ -6,9 +6,10 @@ Usage:
     anvil submit  --config <yaml>     # cold start
     anvil resume  <run_id|run_dir>    # warm start from checkpoint
     anvil status  [<run_id|run_dir>]  # state machine inspection
-    anvil report  [<run_id|run_dir>]  # generate HTML report (week 4)
-    anvil cancel  <run_id|run_dir>    # graceful shutdown (week 2)
-    anvil daemon  <run_id|run_dir>    # long-running orchestrator (week 2)
+    anvil collect [<run_id|run_dir>]  # collect finished DFT -> train/val.xyz
+    anvil daemon  [<run_id|run_dir>]  # drive the AL loop to completion
+    anvil cancel  <run_id|run_dir>    # cancel the run's pending Slurm jobs
+    anvil report  [<run_id|run_dir>]  # generate HTML report (not implemented)
 """
 
 from __future__ import annotations
@@ -78,8 +79,12 @@ def main() -> None:
               help="Generate run dir + VASP inputs but skip sbatch (smoke test).")
 @click.option("--scratch-root", default=None,
               help="Override scratch root (defaults to cluster scratch_root).")
+@click.option("--skip-pools", default="",
+              help="Comma-separated pools to skip, e.g. 'A,B'. Pools A and B "
+                   "run foundation-MLIP MD in this process and need a GPU — "
+                   "skip them to generate only anchors + validation.")
 def submit(config: str, cluster: str, ssh_host: Optional[str],
-           no_submit: bool, scratch_root: Optional[str]) -> None:
+           no_submit: bool, scratch_root: Optional[str], skip_pools: str) -> None:
     """Cold-start a new Anvil run from the user yaml.
 
     Walks INIT → BOOTSTRAP_SEEDS → BOOTSTRAP_DFT_QUEUED in this single
@@ -96,7 +101,10 @@ def submit(config: str, cluster: str, ssh_host: Optional[str],
     click.echo(f"Cluster:          {cluster}")
     click.echo(f"State:            {orch.ckpt.state.value}")
 
-    orch.bootstrap(ssh_host=ssh_host, do_submit=not no_submit)
+    pools = tuple(p.strip().upper() for p in skip_pools.split(",") if p.strip())
+    if pools:
+        click.echo(f"Skipping pools:   {', '.join(pools)}")
+    orch.bootstrap(ssh_host=ssh_host, do_submit=not no_submit, skip_pools=pools)
     click.echo(f"Final state:      {orch.ckpt.state.value}")
     click.echo(f"DFT calls queued: {orch.ckpt.dft_calls_used}")
     if orch.ckpt.pending_job_ids:
@@ -140,6 +148,55 @@ def status(run_ref: Optional[str]) -> None:
 
 @main.command()
 @click.argument("run_ref", required=False)
+@click.option("--wait/--no-wait", default=True, show_default=True,
+              help="Wait for the checkpoint's pending Slurm jobs to finish first.")
+@click.option("--poll-seconds", default=60.0, show_default=True)
+@click.option("--fs-settle", default=0.0, show_default=True,
+              help="Pause this long after the jobs finish before reading their "
+                   "output. Needed where compute nodes see a cached view of "
+                   "the shared filesystem (amarel3).")
+def collect(run_ref: Optional[str], wait: bool, poll_seconds: float,
+            fs_settle: float) -> None:
+    """Collect finished DFT jobs into train.xyz / val.xyz.
+
+    Works at either labeling state: BOOTSTRAP_DFT_QUEUED (bootstrap pools +
+    validation) or ROUND_DFT_QUEUED (the current round's batch).
+    """
+    from anvil.driver import DriverOptions, wait_for_jobs, _settle
+    from anvil.orchestrator import Orchestrator
+    from anvil.state import AnvilState
+
+    run_dir = _resolve_run_dir(run_ref)
+    orch = Orchestrator.resume(run_dir)
+    state = orch.ckpt.state
+    if state not in (AnvilState.BOOTSTRAP_DFT_QUEUED, AnvilState.ROUND_DFT_QUEUED):
+        raise click.ClickException(
+            f"Nothing to collect at state {state.value}. `anvil collect` applies "
+            f"at bootstrap_dft_queued or round_dft_queued."
+        )
+
+    opts = DriverOptions(poll_seconds=poll_seconds, fs_settle_seconds=fs_settle,
+                         log=click.echo)
+    if wait:
+        wait_for_jobs(orch, opts)
+    _settle(opts)
+
+    if state is AnvilState.BOOTSTRAP_DFT_QUEUED:
+        orch.bootstrap_dft_done()
+        orch.val_dft_done()
+    else:
+        orch.round_dft_done()
+
+    click.echo(f"State:   {orch.ckpt.state.value}")
+    for name in ("train.xyz", "val.xyz"):
+        p = orch.run_dir / name
+        if p.exists():
+            from ase.io import read as ase_read
+            click.echo(f"{name}: {len(ase_read(str(p), index=':', format='extxyz'))} frames")
+
+
+@main.command()
+@click.argument("run_ref", required=False)
 def report(run_ref: Optional[str]) -> None:
     """Generate the final HTML report (week 4)."""
     raise click.ClickException("report: not implemented in v1 piece-3 (week 4)")
@@ -147,16 +204,68 @@ def report(run_ref: Optional[str]) -> None:
 
 @main.command()
 @click.argument("run_ref")
-def cancel(run_ref: str) -> None:
-    """Graceful shutdown: cancel pending Slurm jobs (week 2)."""
-    raise click.ClickException("cancel: not implemented in v1 piece-3 (week 2)")
+@click.option("--ssh-host", default=None, help="Run scancel over SSH.")
+def cancel(run_ref: str, ssh_host: Optional[str]) -> None:
+    """Cancel the run's pending Slurm jobs."""
+    from anvil.hpc.slurm import cancel as slurm_cancel
+    from anvil.orchestrator import Orchestrator
+
+    run_dir = _resolve_run_dir(run_ref)
+    orch = Orchestrator.resume(run_dir)
+    ids = slurm_cancel(orch.ckpt.pending_job_ids or [], ssh_host=ssh_host)
+    if not ids:
+        click.echo("No pending jobs recorded in the checkpoint.")
+        return
+    click.echo(f"Cancelled {len(ids)} job(s): {ids[0]}..{ids[-1]}")
+    click.echo(f"State left at {orch.ckpt.state.value}; "
+               f"`anvil daemon {run_dir}` resumes.")
 
 
 @main.command()
-@click.argument("run_ref")
-def daemon(run_ref: str) -> None:
-    """Long-running orchestrator process (week 2)."""
-    raise click.ClickException("daemon: not implemented in v1 piece-3 (week 2)")
+@click.argument("run_ref", required=False)
+@click.option("--poll-seconds", default=60.0, show_default=True,
+              help="How often to check Slurm while waiting.")
+@click.option("--max-rounds", default=None, type=int,
+              help="Stop after this AL round (default: run until a stop "
+                   "criterion fires).")
+@click.option("--device", default="cuda", show_default=True,
+              help="Device for the foundation / ensemble MLIP.")
+@click.option("--skip-pools", default="",
+              help="Comma-separated pools to skip, e.g. 'A,B'.")
+@click.option("--ssh-host", default=None, help="Submit over SSH.")
+@click.option("--fs-settle", default=0.0, show_default=True,
+              help="Pause before reading job output (cached filesystems).")
+@click.option("--train-time", default="12:00:00", show_default=True,
+              help="Slurm walltime for each training job.")
+def daemon(run_ref: Optional[str], poll_seconds: float, max_rounds: Optional[int],
+           device: str, skip_pools: str, ssh_host: Optional[str],
+           fs_settle: float, train_time: str) -> None:
+    """Drive the AL loop: collect, train, validate, next round, until it stops.
+
+    Holds a GPU whenever pools A/B or training run, so submit it as a job:
+
+        sbatch -p gpu --gres=gpu:1 -t 24:00:00 --wrap "anvil daemon <run_dir>"
+
+    Resumable: every step is a checkpointed transition, so re-running it
+    continues from wherever the run currently is.
+    """
+    from anvil.driver import DriverOptions, run_loop
+    from anvil.orchestrator import Orchestrator
+
+    run_dir = _resolve_run_dir(run_ref)
+    orch = Orchestrator.resume(run_dir)
+    opts = DriverOptions(
+        poll_seconds=poll_seconds,
+        max_rounds=max_rounds,
+        device=device,
+        skip_pools=tuple(p.strip().upper() for p in skip_pools.split(",") if p.strip()),
+        ssh_host=ssh_host,
+        fs_settle_seconds=fs_settle,
+        train_time=train_time,
+        log=click.echo,
+    )
+    final = run_loop(orch, opts)
+    click.echo(f"Final state: {final.value}")
 
 
 if __name__ == "__main__":

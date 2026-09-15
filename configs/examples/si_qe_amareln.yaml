@@ -1,0 +1,53 @@
+# Anvil on amareln with the group's Quantum ESPRESSO 7.2 build.
+#
+# Binary, launcher, modules and pseudo dir all come from the cluster registry
+# (anvil/hpc/clusters/amareln.py), so this config only says "engine: qe" plus
+# the per-element pseudopotentials and the SCF settings.
+#
+# Mode note: use `pwx` for production. The PyPI QEpy wheel is a SERIAL build,
+# so `qepy` mode under `srun -n 32` would run 32 independent serial SCFs.
+# Switch to `qepy` only against a source build of QEpy on a -fPIC QE 7.2.
+
+system: si_qe
+elements: [Si]
+
+seeds:
+  from_local:
+    - data/si_seeds/si_diamond.vasp
+    - data/si_seeds/si_beta_tin.vasp
+
+dft:
+  engine: qe
+  kspacing: 0.25
+  engine_options:
+    mode: pwx
+    pw_flags: "-pd .true."           # matches the group's working QE jobs
+    pseudopotentials:
+      Si: si_pbe_v1.uspp.F.UPF       # GBRV, same family as the B/C/K screens
+    input_data:
+      system:
+        ecutwfc: 80                  # GBRV ultrasofts: 80 / 640 (group convention)
+        ecutrho: 640
+        occupations: smearing
+        smearing: mp
+        degauss: 0.010
+      electrons:
+        conv_thr: 1.0e-8
+    slurm:
+      partition: "main"          # amareln currently exposes: main, gpu, price*
+      ntasks: 32
+      mem_per_cpu: 4GB
+      time: "03:00:00"
+      module_purge: true
+      ulimit_stack_unlimited: true
+      env:
+        MKL_NUM_THREADS: 1
+        OMP_NUM_THREADS: 1
+
+regime:
+  pressures_gpa: [0, 5, 10, 15, 20]
+  temperatures_k: [300, 1000, 3000]
+
+budget:
+  max_dft_calls: 600
+  max_walltime_h: 36
